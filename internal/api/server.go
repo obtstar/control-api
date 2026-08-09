@@ -59,6 +59,7 @@ func Serve(cfg *config.Config) error {
 	mux.HandleFunc("GET /api/tasks", s.listTasks)
 	mux.HandleFunc("POST /api/tasks", s.createTask)
 	mux.HandleFunc("POST /api/tasks/{id}/action", s.taskAction)
+	mux.HandleFunc("GET /api/approvals/pending", s.listPendingApprovals)
 	mux.HandleFunc("GET /api/audit", s.listLogs)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

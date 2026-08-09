@@ -1,0 +1,375 @@
+openapi: 3.1.0
+info:
+  title: control-api (control-web MVP subset)
+  description: |
+    control-web 审批工作台 MVP 所需的最小 API 契约。
+    来源：TASK-002 设计产物；编码阶段复制到 control-api/docs/api/openapi.yaml。
+  version: 0.1.0-dev
+
+servers:
+  - url: /api
+    description: 通过 Vite dev proxy 转发到 control-api 127.0.0.1:8765
+
+security:
+  - BearerAuth: []
+
+paths:
+  /auth/login:
+    post:
+      summary: 用户登录
+      description: 校验用户名/密码，返回 Bearer token 与用户信息。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: 请求格式错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 用户名或密码错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /tasks:
+    get:
+      summary: 任务列表
+      description: 返回所有任务索引，按 updated_at 倒序。
+      responses:
+        '200':
+          description: 任务列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Task'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /tasks/{id}/action:
+    post:
+      summary: 任务动作
+      description: |
+        对指定任务执行动作。MVP 聚焦 approve/reject；
+        approve 推进到下一阶段，reject 按 pipeline on_reject 回退。
+        reject 必须附批注；后端会再次校验角色权限。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActionRequest'
+      responses:
+        '200':
+          description: 动作成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+        '400':
+          description: 请求格式错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 当前角色无权审批该阶段
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 状态冲突（如任务不在 awaiting_approval）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /approvals/pending:
+    get:
+      summary: 当前用户可审批列表
+      description: |
+        返回当前登录用户角色可审批的 awaiting_approval 任务。
+        admin 角色返回全部；其他角色只返回 role 匹配的记录。
+      responses:
+        '200':
+          description: 可审批列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PendingApproval'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /audit:
+    get:
+      summary: 审计日志链
+      description: 返回工作日志链，按时间倒序，默认最多 100 条。
+      responses:
+        '200':
+          description: 审计日志列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditLog'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "登录接口返回的 token，后续请求以 Authorization: Bearer <token> 发送。"
+
+  schemas:
+    LoginRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          description: 用户名
+        password:
+          type: string
+          description: 密码
+      required:
+        - username
+        - password
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: Bearer token
+        username:
+          type: string
+          description: 登录用户名
+        role:
+          type: string
+          enum: [customer, designer, tester, team, admin]
+          description: 用户角色
+      required:
+        - token
+        - username
+        - role
+
+    Task:
+      type: object
+      properties:
+        task_id:
+          type: string
+          description: 任务 ID，如 TASK-001
+        title:
+          type: string
+          description: 任务标题
+        repo_key:
+          type: string
+          nullable: true
+          description: 目标仓库键
+        stage:
+          type: string
+          description: 当前阶段
+        status:
+          type: string
+          enum: [pending, running, awaiting_approval, paused, merged, delivered]
+          description: 任务状态
+        authority:
+          type: string
+          description: 文档权柄级别
+        updated_by:
+          type: string
+          nullable: true
+          description: 最近更新人（从 work_log 派生）
+        updated_at:
+          type: string
+          format: date-time
+          description: 最近更新时间
+      required:
+        - task_id
+        - title
+        - stage
+        - status
+        - authority
+        - updated_at
+
+    ActionRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [approve, reject]
+          description: 审批动作
+        comment:
+          type: string
+          nullable: true
+          description: 批注；reject 时必填
+      required:
+        - action
+
+    ActionResponse:
+      type: object
+      properties:
+        task_id:
+          type: string
+          description: 任务 ID
+        stage:
+          type: string
+          description: 动作后阶段
+        status:
+          type: string
+          description: 动作后状态
+      required:
+        - task_id
+        - stage
+        - status
+
+    PendingApproval:
+      type: object
+      properties:
+        task_id:
+          type: string
+          description: 任务 ID
+        title:
+          type: string
+          description: 任务标题
+        stage:
+          type: string
+          description: 待审批阶段
+        role:
+          type: string
+          enum: [customer, designer, tester, team, admin]
+          description: 该审批项所需角色
+        artifact:
+          type: string
+          nullable: true
+          description: 阶段产物摘要或路径
+        created_at:
+          type: string
+          format: date-time
+          description: 进入待审批时间
+      required:
+        - task_id
+        - title
+        - stage
+        - role
+        - created_at
+
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: 日志自增 ID
+        task_id:
+          type: string
+          nullable: true
+          description: 关联任务 ID
+        stage:
+          type: string
+          nullable: true
+          description: 关联阶段
+        action:
+          type: string
+          description: 动作类型
+        operator:
+          type: string
+          description: 操作人
+        model:
+          type: string
+          nullable: true
+          description: 使用模型
+        detail:
+          type: string
+          nullable: true
+          description: 详情
+        entry_hash:
+          type: string
+          description: 日志条目哈希
+        created_at:
+          type: string
+          format: date-time
+          description: 创建时间
+      required:
+        - id
+        - action
+        - operator
+        - entry_hash
+        - created_at
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: 错误信息
+      required:
+        - error

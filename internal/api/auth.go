@@ -18,12 +18,12 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	token, err := s.auth.Login(req.Username, req.Password)
+	user, token, err := s.auth.LoginWithUser(req.Username, req.Password)
 	if err != nil {
 		writeErr(w, 401, err)
 		return
 	}
-	writeJSON(w, map[string]string{"token": token})
+	writeJSON(w, map[string]any{"token": token, "username": user.Username, "role": user.Role})
 }
 
 // withAuth 鉴权中间件：/actuator/health 与 /api/auth/login 放行

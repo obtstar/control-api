@@ -31,13 +31,23 @@ type TaskRow struct {
 	Stage     string `json:"stage"`
 	Status    string `json:"status"`
 	Authority string `json:"authority"`
+	UpdatedBy string `json:"updated_by"`
 	Path      string `json:"path"`
 	UpdatedAt string `json:"updated_at"`
 }
 
 func (s *Store) ListTasks() ([]TaskRow, error) {
-	rows, err := s.Query(`SELECT task_id,title,repo_key,stage,status,authority,path,updated_at
-	                      FROM task_index ORDER BY updated_at DESC`)
+	rows, err := s.Query(`
+SELECT t.task_id, t.title, t.repo_key, t.stage, t.status, t.authority,
+       COALESCE(l.operator, '') AS updated_by, t.path, t.updated_at
+FROM task_index t
+LEFT JOIN (
+  SELECT task_id, operator, MAX(id) AS max_id
+  FROM work_log
+  GROUP BY task_id
+) latest ON t.task_id = latest.task_id
+LEFT JOIN work_log l ON l.id = latest.max_id
+ORDER BY t.updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +56,7 @@ func (s *Store) ListTasks() ([]TaskRow, error) {
 	for rows.Next() {
 		var t TaskRow
 		if err := rows.Scan(&t.TaskID, &t.Title, &t.RepoKey, &t.Stage, &t.Status,
-			&t.Authority, &t.Path, &t.UpdatedAt); err != nil {
+			&t.Authority, &t.UpdatedBy, &t.Path, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -94,6 +104,44 @@ func (s *Store) ListLogs(limit int) ([]LogRow, error) {
 			return nil, err
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+type PendingApproval struct {
+	TaskID    string `json:"task_id"`
+	Title     string `json:"title"`
+	Stage     string `json:"stage"`
+	Role      string `json:"role"`
+	Artifact  string `json:"artifact"`
+	CreatedAt string `json:"created_at"`
+}
+
+// ListPendingApprovals 返回当前角色可审批的 awaiting_approval 任务；admin 返回全部。
+func (s *Store) ListPendingApprovals(role string) ([]PendingApproval, error) {
+	query := `
+SELECT a.task_id, t.title, a.stage, a.role, COALESCE(a.artifact, ''), a.created_at
+FROM approval a
+JOIN task_index t ON t.task_id = a.task_id
+WHERE a.decision IS NULL AND t.status = 'awaiting_approval'`
+	args := []any{}
+	if role != "admin" {
+		query += " AND a.role = ?"
+		args = append(args, role)
+	}
+	query += " ORDER BY a.created_at DESC"
+	rows, err := s.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PendingApproval
+	for rows.Next() {
+		var p PendingApproval
+		if err := rows.Scan(&p.TaskID, &p.Title, &p.Stage, &p.Role, &p.Artifact, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
 	}
 	return out, rows.Err()
 }

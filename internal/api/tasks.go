@@ -120,6 +120,16 @@ func (s *server) taskAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"task_id": id, "stage": m.Stage, "status": m.Status})
 }
 
+func (s *server) listPendingApprovals(w http.ResponseWriter, r *http.Request) {
+	role := r.Header.Get("X-Role")
+	rows, err := s.st.ListPendingApprovals(role)
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, rows)
+}
+
 func nextTaskID(dir string) (string, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {

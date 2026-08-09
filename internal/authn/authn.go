@@ -60,23 +60,29 @@ func (a *Auth) CreateUser(username, password, role string) error {
 	return a.St.AddUser(username, string(hash), role)
 }
 
-// Login 校验口令，返回会话 token（24h）
-func (a *Auth) Login(username, password string) (string, error) {
+// LoginWithUser 校验口令，返回用户与会话 token（24h）
+func (a *Auth) LoginWithUser(username, password string) (*User, string, error) {
 	hash, role, err := a.St.GetUser(username)
 	if err != nil {
-		return "", fmt.Errorf("用户不存在")
+		return nil, "", fmt.Errorf("用户不存在")
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
-		return "", fmt.Errorf("密码错误")
+		return nil, "", fmt.Errorf("密码错误")
 	}
 	tok := make([]byte, 32)
 	rand.Read(tok)
 	token := hex.EncodeToString(tok)
 	exp := time.Now().Add(24 * time.Hour)
 	if err := a.St.AddSession(token, username, role, exp); err != nil {
-		return "", err
+		return nil, "", err
 	}
-	return token, nil
+	return &User{Username: username, Role: role}, token, nil
+}
+
+// Login 校验口令，返回会话 token（24h；保持旧接口兼容）
+func (a *Auth) Login(username, password string) (string, error) {
+	_, token, err := a.LoginWithUser(username, password)
+	return token, err
 }
 
 // Authenticate token → 用户（中间件用）；constant-time 比较防时序侧信道
