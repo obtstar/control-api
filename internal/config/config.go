@@ -51,6 +51,8 @@ type AgentConfig struct {
 	Models map[string]string `yaml:"models"`
 	// SkillsDir 编排 skill 根目录（orchestration/skills），为空则不加载 skill
 	SkillsDir string `yaml:"skills_dir"`
+	// ScriptsDir 平台脚本目录（control-center/scripts，branch.sh 等），注入 pi 的 PATH
+	ScriptsDir string `yaml:"scripts_dir"`
 	// Command 可选：测试用命令模板覆盖（fake-pi），占位符：
 	// {{.Prompt}} {{.TaskID}} {{.Stage}} {{.Model}} {{.WorkDir}}
 	// 设置后忽略 Bin/Models/SkillsDir，直接按模板执行
@@ -84,6 +86,7 @@ func defaults() *Config {
 			Bin:        "pi",
 			Models:     map[string]string{"cheap": "kimi-for-coding-highspeed", "coding": "kimi-for-coding", "heavy": "k3"},
 			SkillsDir:  filepath.Join(h, "control-center", "orchestration", "skills"),
+			ScriptsDir: filepath.Join(h, "control-center", "scripts"),
 			TimeoutSec: 1800,
 		},
 		Paths: PathsConfig{

@@ -38,6 +38,9 @@ func (r *Runner) RunStage(m *tasks.Meta, stage, model string) (string, error) {
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = m.Path
+	if r.Cfg.ScriptsDir != "" { // branch.sh 等平台脚本入 PATH（pi 进程内可裸调）
+		cmd.Env = append(os.Environ(), "PATH="+r.Cfg.ScriptsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 
@@ -80,21 +83,26 @@ func (r *Runner) buildArgv(m *tasks.Meta, stage, model string) ([]string, string
 		bin = "pi"
 	}
 	argv := []string{bin, "--print", "--no-session", "--model", r.Cfg.ResolveModel(model)}
-	for _, sk := range r.stageSkills(stage) {
+	for _, sk := range r.skills(m, stage) {
 		argv = append(argv, "--skill", sk)
 	}
 	argv = append(argv, prompt)
 	return argv, prompt, nil
 }
 
-// stageSkills 当前阶段需加载的 skill：阶段 skill + enforce 四件套（若有）
-func (r *Runner) stageSkills(stage string) []string {
+// skills 当前阶段需加载的 skill：阶段 skill + 领域 skill（task.md domain 指定）+ enforce 四件套
+func (r *Runner) skills(m *tasks.Meta, stage string) []string {
 	if r.Cfg.SkillsDir == "" {
 		return nil
 	}
 	var out []string
 	if p := filepath.Join(r.Cfg.SkillsDir, "stage", stage); exists(p) {
 		out = append(out, p)
+	}
+	if m.Domain != "" {
+		if p := filepath.Join(r.Cfg.SkillsDir, "domain", m.Domain); exists(p) {
+			out = append(out, p)
+		}
 	}
 	enforce := filepath.Join(r.Cfg.SkillsDir, "enforce")
 	if entries, err := os.ReadDir(enforce); err == nil {

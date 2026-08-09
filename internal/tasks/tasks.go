@@ -15,6 +15,7 @@ type Meta struct {
 	TaskID    string `yaml:"task_id"`
 	Title     string `yaml:"title"`
 	RepoKey   string `yaml:"repo_key"`
+	Domain    string `yaml:"domain"` // 领域（可选）：加载 skills/domain/<domain>/
 	Stage     string `yaml:"stage"`  // 当前阶段（空=首阶段）
 	Status    string `yaml:"status"` // pending/running/awaiting_approval/paused/merged/delivered
 	Priority  string `yaml:"priority"`

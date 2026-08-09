@@ -16,7 +16,8 @@ import (
 type createReq struct {
 	Title   string `json:"title"`
 	RepoKey string `json:"repo_key"`
-	Body    string `json:"body"` // 需求正文（L1，人写）
+	Domain  string `json:"domain"` // 可选：领域 skill（frontend-dev/backend-java/…）
+	Body    string `json:"body"`   // 需求正文（L1，人写）
 }
 
 // createTask 创建任务 = 落一份 task.md（文档即任务）
@@ -44,6 +45,7 @@ func (s *server) createTask(w http.ResponseWriter, r *http.Request) {
 task_id: %s
 title: %s
 repo_key: %s
+domain: %s
 stage: ""
 status: pending
 authority: L1
@@ -52,7 +54,7 @@ authority: L1
 # %s
 
 %s
-`, id, req.Title, req.RepoKey, req.Title, req.Body)
+`, id, req.Title, req.RepoKey, req.Domain, req.Title, req.Body)
 	if err := os.WriteFile(filepath.Join(dir, "task.md"), []byte(content), 0o644); err != nil {
 		writeErr(w, 500, err)
 		return

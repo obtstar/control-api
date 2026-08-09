@@ -59,7 +59,7 @@ func TestBuildArgvRealMode(t *testing.T) {
 
 func TestStageSkillsNonexistentDir(t *testing.T) {
 	r := &Runner{Cfg: config.AgentConfig{SkillsDir: "/nonexistent/skills"}}
-	if got := r.stageSkills("design"); len(got) != 0 {
+	if got := r.skills(&tasks.Meta{TaskID: "TASK-001"}, "design"); len(got) != 0 {
 		t.Errorf("skills 目录不存在时应返回空，got %v", got)
 	}
 }
@@ -73,12 +73,13 @@ func TestStageSkillsIncludesEnforce(t *testing.T) {
 		}
 	}
 	write(dir+"/stage/design/SKILL.md", "x")
+	write(dir+"/domain/frontend-dev/SKILL.md", "x")
 	write(dir+"/enforce/authority-check/SKILL.md", "x")
 	write(dir+"/enforce/grounding-check/SKILL.md", "x")
 
 	r := &Runner{Cfg: config.AgentConfig{SkillsDir: dir}}
-	got := r.stageSkills("design")
-	want := []string{dir + "/stage/design", dir + "/enforce/authority-check", dir + "/enforce/grounding-check"}
+	got := r.skills(&tasks.Meta{TaskID: "TASK-001", Domain: "frontend-dev"}, "design")
+	want := []string{dir + "/stage/design", dir + "/domain/frontend-dev", dir + "/enforce/authority-check", dir + "/enforce/grounding-check"}
 	if len(got) != len(want) {
 		t.Fatalf("len = %d, want %d: %v", len(got), len(want), got)
 	}
