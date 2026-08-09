@@ -70,14 +70,50 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+    post:
+      summary: 创建任务
+      description: |
+        创建任务 = 在 tasks/ 下落一份 task.md（文档即任务），初始状态 pending、stage 为空。
+        任务 ID 由后端按 TASK-%03d 递增分配。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTaskRequest'
+      responses:
+        '200':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateTaskResponse'
+        '400':
+          description: 请求格式错误或 title/body 缺失
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /tasks/{id}/action:
     post:
       summary: 任务动作
       description: |
-        对指定任务执行动作。MVP 聚焦 approve/reject；
-        approve 推进到下一阶段，reject 按 pipeline on_reject 回退。
-        reject 必须附批注；后端会再次校验角色权限。
+        对指定任务执行动作：approve 推进到下一阶段，reject 按 pipeline on_reject 回退，
+        pause 暂停（最高运行时权限，任何角色可触发），resume 恢复（仅人执行）。
+        reject 必须附批注；approve/reject 后端会再次校验角色权限。
       parameters:
         - name: id
           in: path
@@ -187,8 +223,9 @@ components:
     BearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
-      description: "登录接口返回的 token，后续请求以 Authorization: Bearer <token> 发送。"
+      description: |
+        登录接口返回的会话 token：32 字节加密随机数的 hex 编码（64 字符），
+        不透明（非 JWT），有效期 24h。后续请求以 Authorization: Bearer <token> 发送。
 
   schemas:
     LoginRequest:
@@ -232,22 +269,22 @@ components:
           type: string
           description: 任务标题
         repo_key:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: 目标仓库键
         stage:
           type: string
           description: 当前阶段
         status:
           type: string
-          enum: [pending, running, awaiting_approval, paused, merged, delivered]
-          description: 任务状态
+          enum: [pending, running, awaiting_approval, paused, delivered]
+          description: |
+            任务状态。实现中不存在 merged 状态赋值点（merge 阶段终审为团队在
+            Git 平台合并，见 FINDING-003 另行跟踪），故契约不含 merged。
         authority:
           type: string
           description: 文档权柄级别
         updated_by:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: 最近更新人（从 work_log 派生）
         updated_at:
           type: string
@@ -261,16 +298,51 @@ components:
         - authority
         - updated_at
 
+    CreateTaskRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          description: 任务标题（必填，去空白后非空）
+        repo_key:
+          type: string
+          description: 目标仓库键（可选，registry/repos.yaml 中的 key）
+        domain:
+          type: string
+          description: 领域 skill（可选，如 frontend-dev/backend-java）
+        body:
+          type: string
+          description: 需求正文（L1，人写；必填，去空白后非空）
+      required:
+        - title
+        - body
+
+    CreateTaskResponse:
+      type: object
+      properties:
+        task_id:
+          type: string
+          description: 分配的任务 ID，如 TASK-001
+        path:
+          type: string
+          description: 任务目录路径（task.md 所在目录）
+      required:
+        - task_id
+        - path
+
     ActionRequest:
       type: object
       properties:
         action:
           type: string
-          enum: [approve, reject]
-          description: 审批动作
+          enum: [approve, reject, pause, resume]
+          description: |
+            任务动作。approve 批准并推进到下一阶段，reject 按 pipeline on_reject 回退（必须附批注）；
+            pause 暂停——最高运行时权限，任何角色可触发，暂停期间禁止一切写操作；
+            resume 恢复——仅人执行，恢复后按当前 stage 重新执行。
+            advance 仅供后端内部自动流程使用，不对外暴露。
         comment:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: 批注；reject 时必填
       required:
         - action
@@ -309,8 +381,7 @@ components:
           enum: [customer, designer, tester, team, admin]
           description: 该审批项所需角色
         artifact:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: 阶段产物摘要或路径
         created_at:
           type: string
@@ -330,12 +401,10 @@ components:
           type: integer
           description: 日志自增 ID
         task_id:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: 关联任务 ID
         stage:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: 关联阶段
         action:
           type: string
@@ -344,12 +413,10 @@ components:
           type: string
           description: 操作人
         model:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: 使用模型
         detail:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: 详情
         entry_hash:
           type: string

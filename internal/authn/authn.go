@@ -8,7 +8,6 @@ package authn
 
 import (
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"time"
@@ -85,7 +84,7 @@ func (a *Auth) Login(username, password string) (string, error) {
 	return token, err
 }
 
-// Authenticate token → 用户（中间件用）；constant-time 比较防时序侧信道
+// Authenticate token → 用户（中间件用）；按 token 主键查库并校验过期时间
 func (a *Auth) Authenticate(token string) (*User, error) {
 	username, role, exp, err := a.St.GetSession(token)
 	if err != nil {
@@ -93,9 +92,6 @@ func (a *Auth) Authenticate(token string) (*User, error) {
 	}
 	if time.Now().After(exp) {
 		return nil, fmt.Errorf("会话已过期")
-	}
-	if subtle.ConstantTimeCompare([]byte(token), []byte(token)) != 1 { // 占位一致性
-		return nil, fmt.Errorf("无效会话: %w", err)
 	}
 	return &User{Username: username, Role: role}, nil
 }

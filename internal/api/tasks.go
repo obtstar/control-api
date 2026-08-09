@@ -64,7 +64,7 @@ authority: L1
 }
 
 type actionReq struct {
-	Action   string `json:"action"` // advance/approve/reject/pause/resume
+	Action   string `json:"action"` // approve/reject/pause/resume（advance 仅供内部自动流程，不经 HTTP）
 	Comment  string `json:"comment"`
 	By       string `json:"by"`
 	Artifact string `json:"artifact"`
@@ -100,8 +100,6 @@ func (s *server) taskAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch req.Action {
-	case "advance":
-		err = s.eng.Advance(m, req.Artifact)
 	case "approve":
 		err = s.eng.Approve(m, req.Comment, req.By)
 	case "reject":
@@ -111,7 +109,8 @@ func (s *server) taskAction(w http.ResponseWriter, r *http.Request) {
 	case "resume":
 		err = s.eng.Resume(m, req.By)
 	default:
-		err = fmt.Errorf("未知 action: %s", req.Action)
+		writeErr(w, 400, fmt.Errorf("未知 action: %s", req.Action))
+		return
 	}
 	if err != nil {
 		writeErr(w, 409, err)
