@@ -4,6 +4,7 @@ package engine
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"control-api/internal/pipeline"
 	"control-api/internal/store"
@@ -13,7 +14,50 @@ import (
 type Engine struct {
 	P  *pipeline.Pipeline
 	St *store.Store
+	// Runner 可选：设置后进入 running 状态自动执行阶段（pi 驱动）
+	Runner interface {
+		RunStage(m *tasks.Meta, stage, model string) (string, error)
+	}
+	TasksDir string
 }
+
+// maybeRun running 状态下异步执行当前阶段，产物就绪后自动 Advance
+func (e *Engine) maybeRun(m *tasks.Meta) {
+	if e.Runner == nil || m.Status != "running" || m.Stage == "merge" {
+		return // merge 阶段等待团队 webhook，不由 agent 执行
+	}
+	meta := *m
+	model := e.P.Model(meta.Stage) // 按 pipeline.yaml 声明选模型别名
+	go func() {
+		artifact, err := e.Runner.RunStage(&meta, meta.Stage, model)
+		if err != nil {
+			e.St.Log(meta.TaskID, meta.Stage, "agent_error", "agent", model, err.Error())
+			fresh := e.reload(meta.TaskID)
+			if fresh != nil {
+				fresh.Status = "paused" // 执行失败自动暂停（熔断语义）
+				e.commit(fresh, "auto_pause", err.Error())
+			}
+			return
+		}
+		fresh := e.reload(meta.TaskID)
+		if fresh == nil || fresh.Status == "paused" {
+			return // 暂停中不自动推进（人恢复后重新执行）
+		}
+		e.Advance(fresh, artifact)
+	}()
+}
+
+func (e *Engine) reload(taskID string) *tasks.Meta {
+	// 从权威源（task.md）重新读取最新状态
+	m, err := tasks.ParseFile(filepath.Join(e.TasksDir, taskID, "task.md"))
+	if err != nil {
+		return nil
+	}
+	return m
+}
+
+// TasksDir 由 api 层注入
+func (e *Engine) SetTasksDir(dir string) { e.TasksDir = dir }
 
 // Advance 阶段完成：需要审批则入队 + awaiting_approval，否则直接进入下一阶段
 func (e *Engine) Advance(m *tasks.Meta, artifact string) error {
@@ -62,7 +106,11 @@ func (e *Engine) Approve(m *tasks.Meta, comment, by string) error {
 	}
 	m.Stage = next
 	m.Status = "running"
-	return e.commit(m, "approved→"+next, comment)
+	if err := e.commit(m, "approved→"+next, comment); err != nil {
+		return err
+	}
+	e.maybeRun(m) // 批准后自动执行新阶段
+	return nil
 }
 
 // Reject 驳回（必附批注）：按 on_reject 回退
@@ -94,7 +142,11 @@ func (e *Engine) Resume(m *tasks.Meta, by string) error {
 		return fmt.Errorf("任务未暂停: %s", m.Status)
 	}
 	m.Status = "running"
-	return e.commit(m, "resume", "by "+by)
+	if err := e.commit(m, "resume", "by "+by); err != nil {
+		return err
+	}
+	e.maybeRun(m) // 恢复后重新执行当前阶段
+	return nil
 }
 
 func (e *Engine) commit(m *tasks.Meta, action, detail string) error {

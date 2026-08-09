@@ -15,8 +15,8 @@ type Meta struct {
 	TaskID    string `yaml:"task_id"`
 	Title     string `yaml:"title"`
 	RepoKey   string `yaml:"repo_key"`
-	Stage     string `yaml:"stage"`     // 当前阶段（空=首阶段）
-	Status    string `yaml:"status"`    // pending/running/awaiting_approval/paused/merged/delivered
+	Stage     string `yaml:"stage"`  // 当前阶段（空=首阶段）
+	Status    string `yaml:"status"` // pending/running/awaiting_approval/paused/merged/delivered
 	Priority  string `yaml:"priority"`
 	Authority string `yaml:"authority"` // 恒 L1（需求级）
 	Path      string `yaml:"-"`         // 目录路径（非 frontmatter 字段）

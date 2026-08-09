@@ -35,11 +35,19 @@ type PathsConfig struct {
 }
 
 type Config struct {
-	Path   string `yaml:"-"`
+	Path   string       `yaml:"-"`
 	Server ServerConfig `yaml:"server"`
 	DB     DBConfig     `yaml:"db"`
 	LLM    LLMConfig    `yaml:"llm"`
 	Paths  PathsConfig  `yaml:"paths"`
+	Agent  AgentConfig  `yaml:"agent"`
+}
+
+type AgentConfig struct {
+	// pi 调用模板，占位符：{{.Prompt}} {{.TaskID}} {{.Stage}} {{.WorkDir}}
+	// 默认 print 模式；RPC 模式协议在 control-pi 实测后调整
+	Command    string `yaml:"command"`
+	TimeoutSec int    `yaml:"timeout_sec"`
 }
 
 func home() string {
@@ -56,6 +64,10 @@ func defaults() *Config {
 		Server: ServerConfig{Host: "127.0.0.1", Port: 8765},
 		DB:     DBConfig{Path: filepath.Join(h, "data", "control.db")},
 		LLM:    LLMConfig{Endpoint: "http://litellm.internal:4000"},
+		Agent: AgentConfig{
+			Command:    "pi -m {{.Model}} -p {{.Prompt}}",
+			TimeoutSec: 1800,
+		},
 		Paths: PathsConfig{
 			Home:     h,
 			GitDir:   filepath.Join(h, ".repos"),

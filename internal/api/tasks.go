@@ -61,9 +61,9 @@ authority: L1
 }
 
 type actionReq struct {
-	Action  string `json:"action"` // advance/approve/reject/pause/resume
-	Comment string `json:"comment"`
-	By      string `json:"by"`
+	Action   string `json:"action"` // advance/approve/reject/pause/resume
+	Comment  string `json:"comment"`
+	By       string `json:"by"`
 	Artifact string `json:"artifact"`
 }
 

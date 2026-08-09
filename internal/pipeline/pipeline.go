@@ -14,6 +14,16 @@ type Stage struct {
 	ID       string `yaml:"id"`
 	Approval string `yaml:"approval"`  // required | auto | gitlab/team_mr_review
 	OnReject string `yaml:"on_reject"` // retry | back_to_coding
+	Model    string `yaml:"model"`     // LiteLLM 别名：cheap/coding/heavy（空=coding）
+}
+
+// Model 返回阶段模型别名（默认 coding）
+func (p *Pipeline) Model(id string) string {
+	_, s := p.stage(id)
+	if s == nil || s.Model == "" {
+		return "coding"
+	}
+	return s.Model
 }
 
 type Pipeline struct {

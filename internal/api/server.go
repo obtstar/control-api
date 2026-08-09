@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"control-api/internal/agent"
 	"control-api/internal/config"
 	"control-api/internal/engine"
 	"control-api/internal/pipeline"
@@ -35,6 +36,10 @@ func Serve(cfg *config.Config) error {
 		return err
 	}
 	s := &server{cfg: cfg, st: st, eng: &engine.Engine{P: pl, St: st}}
+	s.eng.SetTasksDir(cfg.Paths.TasksDir)
+	if cfg.Agent.Command != "" {
+		s.eng.Runner = &agent.Runner{Cfg: cfg.Agent}
+	}
 
 	// 任务目录索引：启动全量同步 + fsnotify 增量
 	os.MkdirAll(cfg.Paths.TasksDir, 0o755)
