@@ -120,3 +120,42 @@ WHERE task_id=? AND stage=? AND decision IS NULL`,
 	}
 	return nil
 }
+
+// ── authn 存储 ───────────────────────────────────────────────
+
+func (s *Store) AddUser(username, hash, role string) error {
+	_, err := s.Exec(`INSERT INTO users (username, pass_hash, role) VALUES (?, ?, ?)
+	                  ON CONFLICT(username) DO UPDATE SET pass_hash=excluded.pass_hash, role=excluded.role`,
+		username, hash, role)
+	return err
+}
+
+func (s *Store) GetUser(username string) (hash, role string, err error) {
+	err = s.QueryRow(`SELECT pass_hash, role FROM users WHERE username=?`, username).Scan(&hash, &role)
+	return
+}
+
+func (s *Store) AddSession(token, username, role string, exp time.Time) error {
+	_, err := s.Exec(`INSERT INTO sessions (token, username, role, expires_at) VALUES (?, ?, ?, ?)`,
+		token, username, role, exp.Unix())
+	return err
+}
+
+func (s *Store) GetSession(token string) (username, role string, exp time.Time, err error) {
+	var secs int64
+	err = s.QueryRow(`SELECT username, role, expires_at FROM sessions WHERE token=?`, token).
+		Scan(&username, &role, &secs)
+	if err != nil {
+		return
+	}
+	exp = time.Unix(secs, 0)
+	return
+}
+
+// ApprovalRoleOf 查询任务当前待审批的角色
+func (s *Store) ApprovalRoleOf(taskID string) (string, error) {
+	var role string
+	err := s.QueryRow(`SELECT role FROM approval WHERE task_id=? AND decision IS NULL
+	                   ORDER BY id DESC LIMIT 1`, taskID).Scan(&role)
+	return role, err
+}

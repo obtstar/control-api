@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"control-api/internal/authn"
 	"control-api/internal/tasks"
 )
 
@@ -75,7 +76,21 @@ func (s *server) taskAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.By == "" {
-		req.By = "human"
+		req.By = r.Header.Get("X-User")
+		if req.By == "" {
+			req.By = "human"
+		}
+	}
+	// 审批动作的角色路由校验：approval.role 必须与用户角色匹配（admin 通吃）
+	if req.Action == "approve" || req.Action == "reject" {
+		role, err := s.st.ApprovalRoleOf(id)
+		if err == nil && role != "" {
+			u := &authn.User{Username: r.Header.Get("X-User"), Role: r.Header.Get("X-Role")}
+			if !authn.CanDecide(u, role) {
+				writeErr(w, 403, fmt.Errorf("该阶段审批权属于角色 %s", role))
+				return
+			}
+		}
 	}
 	m, err := tasks.ParseFile(filepath.Join(s.cfg.Paths.TasksDir, id, "task.md"))
 	if err != nil {

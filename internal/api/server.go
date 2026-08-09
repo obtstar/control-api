@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"control-api/internal/agent"
+	"control-api/internal/authn"
 	"control-api/internal/config"
 	"control-api/internal/engine"
 	"control-api/internal/pipeline"
@@ -18,9 +19,10 @@ import (
 )
 
 type server struct {
-	cfg *config.Config
-	st  *store.Store
-	eng *engine.Engine
+	cfg  *config.Config
+	st   *store.Store
+	eng  *engine.Engine
+	auth *authn.Auth
 }
 
 func Serve(cfg *config.Config) error {
@@ -36,6 +38,7 @@ func Serve(cfg *config.Config) error {
 		return err
 	}
 	s := &server{cfg: cfg, st: st, eng: &engine.Engine{P: pl, St: st}}
+	s.auth = &authn.Auth{St: st}
 	s.eng.SetTasksDir(cfg.Paths.TasksDir)
 	if cfg.Agent.Command != "" {
 		s.eng.Runner = &agent.Runner{Cfg: cfg.Agent}
@@ -54,6 +57,7 @@ func Serve(cfg *config.Config) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /actuator/health", s.health)
+	mux.HandleFunc("POST /api/auth/login", s.login)
 	mux.HandleFunc("GET /api/tasks", s.listTasks)
 	mux.HandleFunc("POST /api/tasks", s.createTask)
 	mux.HandleFunc("POST /api/tasks/{id}/action", s.taskAction)
@@ -61,7 +65,7 @@ func Serve(cfg *config.Config) error {
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	log.Printf("control-api listening on %s（pipeline: %d 阶段）", addr, len(pl.Stages))
-	return http.ListenAndServe(addr, mux)
+	return http.ListenAndServe(addr, s.withAuth(mux))
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

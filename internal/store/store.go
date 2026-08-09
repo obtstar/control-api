@@ -68,6 +68,18 @@ CREATE TABLE IF NOT EXISTS approval (             -- 审批队列（按角色路
   decided_at  DATETIME,
   created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS users (                -- 多真人账号（个人版最小模型）
+  username    TEXT PRIMARY KEY,
+  pass_hash   TEXT NOT NULL,
+  role        TEXT NOT NULL,                       -- customer/designer/tester/team/admin
+  created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS sessions (             -- 会话 token
+  token       TEXT PRIMARY KEY,
+  username    TEXT NOT NULL,
+  role        TEXT NOT NULL,
+  expires_at  DATETIME NOT NULL
+);
 `)
 	return err
 }
