@@ -1,7 +1,7 @@
-// Package agent pi 进程执行层：每阶段拉起一次 pi（print 模式），
+// Package agent pi 进程执行层：每阶段拉起一次 pi（非交互 print 模式），
 // 产物落 tasks/<id>/ 目录（Git 权威），输出摘要记 work_log。
-// 注意：pi 的 RPC/print 协议细节以 control-pi fork 的实测为准，
-// 命令模板经 config 可调（agent.command），便于协议演进。
+// 真实调用：pi --print --no-session --model <模式> --skill <阶段skill> <提示词>
+// 测试/回退：agent.command 配置模板（fake-pi）时走模板执行。
 package agent
 
 import (
@@ -22,21 +22,11 @@ type Runner struct {
 	Cfg config.AgentConfig
 }
 
-// RunStage 在任务工作目录执行一个阶段，返回产物路径；model 为 LiteLLM 别名
+// RunStage 在任务工作目录执行一个阶段，返回产物路径；model 为流水线别名（cheap/coding/heavy）
 func (r *Runner) RunStage(m *tasks.Meta, stage, model string) (string, error) {
-	if r.Cfg.Command == "" {
-		return "", fmt.Errorf("agent.command 未配置（config.yaml agent 段）")
-	}
-	prompt := buildPrompt(m, stage)
-	argv := []string{}
-	for _, tok := range strings.Fields(r.Cfg.Command) {
-		argv = append(argv, strings.NewReplacer(
-			"{{.Prompt}}", prompt,
-			"{{.TaskID}}", m.TaskID,
-			"{{.Stage}}", stage,
-			"{{.Model}}", model,
-			"{{.WorkDir}}", m.Path,
-		).Replace(tok))
+	argv, _, err := r.buildArgv(m, stage, model)
+	if err != nil {
+		return "", err
 	}
 
 	timeout := time.Duration(r.Cfg.TimeoutSec) * time.Second
@@ -66,6 +56,60 @@ func (r *Runner) RunStage(m *tasks.Meta, stage, model string) (string, error) {
 		return artifact, fmt.Errorf("阶段 %s 执行失败: %w", stage, runErr)
 	}
 	return artifact, nil
+}
+
+// buildArgv 构造 pi 调用参数；agent.command 配置模板时按模板展开（测试用）
+func (r *Runner) buildArgv(m *tasks.Meta, stage, model string) ([]string, string, error) {
+	prompt := buildPrompt(m, stage)
+	if r.Cfg.Command != "" {
+		argv := []string{}
+		for _, tok := range strings.Fields(r.Cfg.Command) {
+			argv = append(argv, strings.NewReplacer(
+				"{{.Prompt}}", prompt,
+				"{{.TaskID}}", m.TaskID,
+				"{{.Stage}}", stage,
+				"{{.Model}}", model,
+				"{{.WorkDir}}", m.Path,
+			).Replace(tok))
+		}
+		return argv, prompt, nil
+	}
+
+	bin := r.Cfg.Bin
+	if bin == "" {
+		bin = "pi"
+	}
+	argv := []string{bin, "--print", "--no-session", "--model", r.Cfg.ResolveModel(model)}
+	for _, sk := range r.stageSkills(stage) {
+		argv = append(argv, "--skill", sk)
+	}
+	argv = append(argv, prompt)
+	return argv, prompt, nil
+}
+
+// stageSkills 当前阶段需加载的 skill：阶段 skill + enforce 四件套（若有）
+func (r *Runner) stageSkills(stage string) []string {
+	if r.Cfg.SkillsDir == "" {
+		return nil
+	}
+	var out []string
+	if p := filepath.Join(r.Cfg.SkillsDir, "stage", stage); exists(p) {
+		out = append(out, p)
+	}
+	enforce := filepath.Join(r.Cfg.SkillsDir, "enforce")
+	if entries, err := os.ReadDir(enforce); err == nil {
+		for _, e := range entries {
+			if e.IsDir() && exists(filepath.Join(enforce, e.Name())) {
+				out = append(out, filepath.Join(enforce, e.Name()))
+			}
+		}
+	}
+	return out
+}
+
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // buildPrompt 阶段提示词：任务需求 + 阶段指令 + 权柄约束（18 章硬编码）

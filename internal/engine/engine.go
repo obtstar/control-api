@@ -4,6 +4,7 @@ package engine
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 
 	"control-api/internal/pipeline"
@@ -28,9 +29,11 @@ func (e *Engine) maybeRun(m *tasks.Meta) {
 	}
 	meta := *m
 	model := e.P.Model(meta.Stage) // 按 pipeline.yaml 声明选模型别名
+	log.Printf("[engine] maybeRun %s stage=%s status=%s model=%s runner=%v", meta.TaskID, meta.Stage, meta.Status, model, e.Runner != nil)
 	go func() {
 		artifact, err := e.Runner.RunStage(&meta, meta.Stage, model)
 		if err != nil {
+			log.Printf("[engine] agent_error %s: %v", meta.TaskID, err)
 			e.St.Log(meta.TaskID, meta.Stage, "agent_error", "agent", model, err.Error())
 			fresh := e.reload(meta.TaskID)
 			if fresh != nil {

@@ -44,10 +44,26 @@ type Config struct {
 }
 
 type AgentConfig struct {
-	// pi 调用模板，占位符：{{.Prompt}} {{.TaskID}} {{.Stage}} {{.WorkDir}}
-	// 默认 print 模式；RPC 模式协议在 control-pi 实测后调整
+	// Bin pi 可执行文件名（默认 pi，PATH 查找）
+	Bin string `yaml:"bin"`
+	// Models 流水线模型别名 → pi 模型模式（provider/id 或模糊模式）
+	// 别名见 pipeline.yaml 各阶段 model 字段：cheap/coding/heavy
+	Models map[string]string `yaml:"models"`
+	// SkillsDir 编排 skill 根目录（orchestration/skills），为空则不加载 skill
+	SkillsDir string `yaml:"skills_dir"`
+	// Command 可选：测试用命令模板覆盖（fake-pi），占位符：
+	// {{.Prompt}} {{.TaskID}} {{.Stage}} {{.Model}} {{.WorkDir}}
+	// 设置后忽略 Bin/Models/SkillsDir，直接按模板执行
 	Command    string `yaml:"command"`
 	TimeoutSec int    `yaml:"timeout_sec"`
+}
+
+// ResolveModel 模型别名 → pi 模型模式；未注册别名原样透传
+func (a AgentConfig) ResolveModel(alias string) string {
+	if m, ok := a.Models[alias]; ok {
+		return m
+	}
+	return alias
 }
 
 func home() string {
@@ -65,7 +81,9 @@ func defaults() *Config {
 		DB:     DBConfig{Path: filepath.Join(h, "data", "control.db")},
 		LLM:    LLMConfig{Endpoint: "http://litellm.internal:4000"},
 		Agent: AgentConfig{
-			Command:    "pi -m {{.Model}} -p {{.Prompt}}",
+			Bin:        "pi",
+			Models:     map[string]string{"cheap": "kimi-for-coding-highspeed", "coding": "kimi-for-coding", "heavy": "k3"},
+			SkillsDir:  filepath.Join(h, "control-center", "orchestration", "skills"),
 			TimeoutSec: 1800,
 		},
 		Paths: PathsConfig{

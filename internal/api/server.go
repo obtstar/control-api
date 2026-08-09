@@ -40,9 +40,7 @@ func Serve(cfg *config.Config) error {
 	s := &server{cfg: cfg, st: st, eng: &engine.Engine{P: pl, St: st}}
 	s.auth = &authn.Auth{St: st}
 	s.eng.SetTasksDir(cfg.Paths.TasksDir)
-	if cfg.Agent.Command != "" {
-		s.eng.Runner = &agent.Runner{Cfg: cfg.Agent}
-	}
+	s.eng.Runner = &agent.Runner{Cfg: cfg.Agent}
 
 	// 任务目录索引：启动全量同步 + fsnotify 增量
 	os.MkdirAll(cfg.Paths.TasksDir, 0o755)
