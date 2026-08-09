@@ -77,6 +77,31 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 	return err
 }
 
+// ActionAgentError 阶段执行失败写入的 work_log action（连败计数以此为据）
+const ActionAgentError = "agent_error"
+
+// ConsecutiveFailures 统计任务最近的连续阶段失败次数（从 work_log 派生，不改 schema）：
+// 按 id 倒序数前缀连续的 ActionAgentError 条数，遇到任何非失败 action 即停
+func (s *Store) ConsecutiveFailures(taskID string) (int, error) {
+	rows, err := s.Query(`SELECT action FROM work_log WHERE task_id=? ORDER BY id DESC`, taskID)
+	if err != nil {
+		return 0, fmt.Errorf("consecutive failures %s: %w", taskID, err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var action string
+		if err := rows.Scan(&action); err != nil {
+			return 0, fmt.Errorf("consecutive failures %s: %w", taskID, err)
+		}
+		if action != ActionAgentError {
+			break
+		}
+		n++
+	}
+	return n, rows.Err()
+}
+
 type LogRow struct {
 	ID        int64  `json:"id"`
 	TaskID    string `json:"task_id"`

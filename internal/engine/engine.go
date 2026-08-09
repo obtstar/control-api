@@ -34,12 +34,7 @@ func (e *Engine) maybeRun(m *tasks.Meta) {
 		artifact, err := e.Runner.RunStage(&meta, meta.Stage, model)
 		if err != nil {
 			log.Printf("[engine] agent_error %s: %v", meta.TaskID, err)
-			e.St.Log(meta.TaskID, meta.Stage, "agent_error", "agent", model, err.Error())
-			fresh := e.reload(meta.TaskID)
-			if fresh != nil {
-				fresh.Status = "paused" // 执行失败自动暂停（熔断语义）
-				e.commit(fresh, "auto_pause", err.Error())
-			}
+			e.handleRunFailure(&meta, model, err)
 			return
 		}
 		fresh := e.reload(meta.TaskID)
@@ -48,6 +43,40 @@ func (e *Engine) maybeRun(m *tasks.Meta) {
 		}
 		e.Advance(fresh, artifact)
 	}()
+}
+
+// handleRunFailure 阶段执行失败：记 work_log 后按连败熔断策略处理（18 章暂停最高权限）。
+// 连续失败（含本次）达阈值 → auto pause；否则置回 pending 等待重试。
+// 连败计数依赖 work_log 中连续前缀的失败条目，故重试状态回写不再写 work_log。
+func (e *Engine) handleRunFailure(m *tasks.Meta, model string, runErr error) {
+	failures, err := e.St.ConsecutiveFailures(m.TaskID)
+	if err != nil {
+		log.Printf("[engine] 连败计数失败 %s: %v（连同本次按熔断处理）", m.TaskID, err)
+		failures = e.P.FailureThreshold() - 1
+	}
+	failures++ // 含本次
+	detail := fmt.Sprintf("第 %d 次失败: %v", failures, runErr)
+	e.St.Log(m.TaskID, m.Stage, store.ActionAgentError, "agent", model, detail)
+	fresh := e.reload(m.TaskID)
+	if fresh == nil {
+		return
+	}
+	if failures >= e.P.FailureThreshold() {
+		fresh.Status = "paused" // 连败熔断自动暂停
+		e.commit(fresh, "auto_pause", detail)
+		if e.P.CircuitBreaker.Action == "auto_pause_and_notify" {
+			log.Printf("[engine] notify: 任务 %s 连败 %d 次已自动暂停", m.TaskID, failures)
+		}
+		return
+	}
+	fresh.Status = "pending" // 未达阈值：可重试（状态回写权威 task.md，索引派生同步）
+	if err := tasks.WriteMeta(fresh); err != nil {
+		log.Printf("[engine] 回写 %s 失败: %v", m.TaskID, err)
+		return
+	}
+	if err := e.St.UpsertTask(fresh); err != nil {
+		log.Printf("[engine] 索引同步 %s 失败: %v", m.TaskID, err)
+	}
 }
 
 func (e *Engine) reload(taskID string) *tasks.Meta {
@@ -116,8 +145,11 @@ func (e *Engine) Approve(m *tasks.Meta, comment, by string) error {
 	return nil
 }
 
-// Reject 驳回（必附批注）：按 on_reject 回退
+// Reject 驳回（必附批注）：按 on_reject 回退；仅 awaiting_approval 状态可驳回
 func (e *Engine) Reject(m *tasks.Meta, comment, by string) error {
+	if m.Status != "awaiting_approval" {
+		return fmt.Errorf("任务不在待审批状态: %s", m.Status)
+	}
 	if comment == "" {
 		return fmt.Errorf("驳回必须附批注")
 	}
