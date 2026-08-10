@@ -61,6 +61,7 @@ func Serve(cfg *config.Config) error {
 	mux.HandleFunc("POST /api/tasks/{id}/action", s.taskAction)
 	mux.HandleFunc("GET /api/approvals/pending", s.listPendingApprovals)
 	mux.HandleFunc("GET /api/audit", s.listLogs)
+	mux.HandleFunc("GET /api/findings", s.listFindings)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	log.Printf("control-api listening on %s（pipeline: %d 阶段）", addr, len(pl.Stages))

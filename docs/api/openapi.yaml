@@ -218,6 +218,35 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /findings:
+    get:
+      summary: 问题一览
+      description: |
+        返回平台发现问题登记表，每次请求实时解析权威源
+        control-center/docs/FINDINGS.md 的 Markdown 表格（web 问题一览为派生视图，
+        不做缓存）。表头/分隔行与非 FINDING 开头的行被跳过。
+      responses:
+        '200':
+          description: 问题列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Finding'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务器内部错误（如 FINDINGS.md 读取失败）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -431,6 +460,40 @@ components:
         - operator
         - entry_hash
         - created_at
+
+    Finding:
+      type: object
+      properties:
+        id:
+          type: string
+          description: 问题 ID，如 FINDING-001
+        date:
+          type: string
+          description: 登记日期
+        source:
+          type: string
+          description: 来源（评审/核查轮次）
+        phenomenon:
+          type: string
+          description: 现象描述
+        evidence:
+          type: string
+          description: 证据（文件:行号等，可为空串）
+        impact:
+          type: string
+          description: 影响
+        status:
+          type: string
+          enum: [open, confirmed, fixed, wontfix]
+          description: 处理状态
+        target:
+          type: string
+          description: 去向（修复提交或跟进位置，允许空串）
+      required:
+        - id
+        - date
+        - phenomenon
+        - status
 
     Error:
       type: object
