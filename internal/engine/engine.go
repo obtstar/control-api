@@ -120,15 +120,21 @@ func (e *Engine) Advance(m *tasks.Meta, artifact string) error {
 	if err != nil {
 		return err
 	}
-	return e.enterNext(m, next, "auto_advance", next)
+	return e.enterNextAs(m, next, "auto_advance", "agent", next)
 }
 
-// enterNext 进入下一阶段：team_mr_review 终审无 agent 执行，直接入待审批队列等
-// 合并 webhook；其余阶段置 running 并交由 maybeRun 驱动（next=="" 即末阶段 → delivered）
+// enterNext 自动路径（agent 执行）进入下一阶段，work_log operator 记 agent
 func (e *Engine) enterNext(m *tasks.Meta, next, action, detail string) error {
+	return e.enterNextAs(m, next, action, "agent", detail)
+}
+
+// enterNextAs 进入下一阶段：team_mr_review 终审无 agent 执行，直接入待审批队列等
+// 合并 webhook；其余阶段置 running 并交由 maybeRun 驱动（next=="" 即末阶段 → delivered）。
+// operator 为本次流转的归因操作人（FINDING-007：人工动作记真实操作人）。
+func (e *Engine) enterNextAs(m *tasks.Meta, next, action, operator, detail string) error {
 	if next == "" {
 		m.Status = "delivered"
-		return e.commit(m, "deliver", detail)
+		return e.commitAs(m, "deliver", operator, detail)
 	}
 	m.Stage = next
 	if e.P.IsTeamReview(next) {
@@ -136,10 +142,10 @@ func (e *Engine) enterNext(m *tasks.Meta, next, action, detail string) error {
 		if err := e.St.NewApproval(m.TaskID, next, roleFor(next), detail); err != nil {
 			return err
 		}
-		return e.commit(m, action, detail)
+		return e.commitAs(m, action, operator, detail)
 	}
 	m.Status = "running"
-	if err := e.commit(m, action, detail); err != nil {
+	if err := e.commitAs(m, action, operator, detail); err != nil {
 		return err
 	}
 	e.maybeRun(m)
@@ -165,7 +171,7 @@ func (e *Engine) Approve(m *tasks.Meta, comment, by string) error {
 	if err != nil {
 		return err
 	}
-	return e.enterNext(m, next, "approved→"+next, comment)
+	return e.enterNextAs(m, next, "approved→"+next, by, comment)
 }
 
 // Reject 驳回（必附批注）：按 on_reject 回退；仅 awaiting_approval 状态可驳回。
@@ -187,7 +193,7 @@ func (e *Engine) Reject(m *tasks.Meta, comment, by string) error {
 	target := e.P.RejectTarget(m.Stage)
 	m.Stage = target
 	m.Status = "running"
-	return e.commit(m, "reject→"+target, comment)
+	return e.commitAs(m, "reject→"+target, by, comment)
 }
 
 // Pause 暂停（最高权限，任何状态可触发，停写）
@@ -196,7 +202,7 @@ func (e *Engine) Pause(m *tasks.Meta, by string) error {
 		return fmt.Errorf("任务已暂停")
 	}
 	m.Status = "paused"
-	return e.commit(m, "pause", "by "+by)
+	return e.commitAs(m, "pause", by, "by "+by)
 }
 
 // Resume 恢复（仅人可操作；恢复后按当前 stage 重新执行）
@@ -205,7 +211,7 @@ func (e *Engine) Resume(m *tasks.Meta, by string) error {
 		return fmt.Errorf("任务未暂停: %s", m.Status)
 	}
 	m.Status = "running"
-	if err := e.commit(m, "resume", "by "+by); err != nil {
+	if err := e.commitAs(m, "resume", by, "by "+by); err != nil {
 		return err
 	}
 	e.maybeRun(m) // 恢复后重新执行当前阶段
@@ -234,11 +240,12 @@ func (e *Engine) MarkMerged(taskID, detail string) error {
 	if err != nil {
 		return err
 	}
-	return e.enterNext(m, next, "merged→"+next, detail)
+	return e.enterNextAs(m, next, "merged→"+next, "webhook", detail)
 }
 
+// commit 自动路径落盘：agent 驱动的状态迁移，work_log operator 恒记 agent
 func (e *Engine) commit(m *tasks.Meta, action, detail string) error {
-	return e.commitAs(m, action, detailActor(detail), detail)
+	return e.commitAs(m, action, "agent", detail)
 }
 
 // commitAs 状态落盘三件套：task.md（权威）→ task_index（派生）→ work_log（hash 链）
@@ -251,8 +258,6 @@ func (e *Engine) commitAs(m *tasks.Meta, action, operator, detail string) error 
 	}
 	return e.St.Log(m.TaskID, m.Stage, action, operator, "", detail)
 }
-
-func detailActor(detail string) string { return "agent" }
 
 func roleFor(stage string) string {
 	switch stage {

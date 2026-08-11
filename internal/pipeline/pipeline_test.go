@@ -65,3 +65,60 @@ func TestFailureThresholdDefault(t *testing.T) {
 		})
 	}
 }
+
+// merge 终审闸权力模型校验（FINDING 权力模型）：approval 不得为 auto，
+// 依据 control-center/docs/architecture/00-principles.md 审批闸原则 + 18-authority.md merge 终审归团队
+func TestLoadValidatesMergeApproval(t *testing.T) {
+	cases := []struct {
+		name    string
+		stages  string
+		wantErr bool
+	}{
+		{"merge=auto 拒载", `
+    - id: coding
+      approval: required
+    - id: merge
+      approval: auto
+    - id: deliver
+      approval: auto
+`, true},
+		{"merge=team_mr_review 通过", `
+    - id: coding
+      approval: required
+    - id: merge
+      approval: team_mr_review
+    - id: deliver
+      approval: auto
+`, false},
+		{"merge=required 通过", `
+    - id: coding
+      approval: required
+    - id: merge
+      approval: required
+    - id: deliver
+      approval: auto
+`, false},
+		{"无 merge 阶段通过", `
+    - id: coding
+      approval: required
+    - id: deliver
+      approval: auto
+`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "pipeline.yaml")
+			if err := os.WriteFile(path, []byte("pipeline:\n  stages:"+c.stages), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if c.wantErr && err == nil {
+				t.Fatal("应拒绝加载")
+			}
+			if !c.wantErr && err != nil {
+				t.Fatalf("应通过: %v", err)
+			}
+		})
+	}
+}

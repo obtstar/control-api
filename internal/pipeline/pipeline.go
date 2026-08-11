@@ -70,7 +70,24 @@ func Load(path string) (*Pipeline, error) {
 	if len(f.Pipeline.Stages) == 0 {
 		return nil, fmt.Errorf("%s: pipeline.stages 为空", path)
 	}
+	if err := validateStages(f.Pipeline.Stages); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	return &Pipeline{Stages: f.Pipeline.Stages, CircuitBreaker: f.CircuitBreaker}, nil
+}
+
+// validateStages 权力模型加载校验：merge 阶段为终审闸，审批不得为 auto
+// （依据：control-center/docs/architecture/00-principles.md 每阶段一道审批闸 +
+// 18-authority.md merge 终审归团队 MR 评审，平台无权自动放行）。
+func validateStages(stages []Stage) error {
+	for _, s := range stages {
+		if s.ID == "merge" && s.Approval != "required" && s.Approval != "team_mr_review" {
+			return fmt.Errorf("merge 阶段 approval=%q 非法：终审不得为 auto，须为 required 或 team_mr_review"+
+				"（依据 control-center/docs/architecture/00-principles.md 审批闸原则 + 18-authority.md merge 终审归团队）",
+				s.Approval)
+		}
+	}
+	return nil
 }
 
 func (p *Pipeline) stage(id string) (int, *Stage) {
