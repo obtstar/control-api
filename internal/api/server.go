@@ -13,6 +13,7 @@ import (
 	"control-api/internal/authn"
 	"control-api/internal/config"
 	"control-api/internal/engine"
+	"control-api/internal/kb"
 	"control-api/internal/pipeline"
 	"control-api/internal/store"
 	"control-api/internal/watcher"
@@ -41,6 +42,12 @@ func Serve(cfg *config.Config) error {
 	s.auth = &authn.Auth{St: st}
 	s.eng.SetTasksDir(cfg.Paths.TasksDir)
 	s.eng.Runner = &agent.Runner{Cfg: cfg.Agent}
+
+	// KB grounding（18.3，FINDING-016）：mode off 或 endpoint 空 = 不注入，零行为变化
+	if cfg.KB.Mode != "" && cfg.KB.Mode != "off" && cfg.KB.Endpoint != "" {
+		s.eng.Searcher = &kb.RESTSearcher{Endpoint: cfg.KB.Endpoint, APIKey: cfg.KB.APIKey}
+		s.eng.KBMode = cfg.KB.Mode
+	}
 
 	// 任务目录索引：启动全量同步 + fsnotify 增量
 	os.MkdirAll(cfg.Paths.TasksDir, 0o755)

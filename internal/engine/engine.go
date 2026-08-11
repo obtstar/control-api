@@ -7,6 +7,7 @@ import (
 	"log"
 	"path/filepath"
 
+	"control-api/internal/kb"
 	"control-api/internal/pipeline"
 	"control-api/internal/store"
 	"control-api/internal/tasks"
@@ -20,12 +21,19 @@ type Engine struct {
 		RunStage(m *tasks.Meta, stage, model string) (string, error)
 	}
 	TasksDir string
+	// Searcher/KBMode 可选 KB grounding（18.3，FINDING-016）：
+	// Searcher nil 或 KBMode off|"" = 完全跳过，零行为变化
+	Searcher kb.Searcher
+	KBMode   string // off | warn | enforce
 }
 
 // maybeRun running 状态下异步执行当前阶段，产物就绪后自动 Advance
 func (e *Engine) maybeRun(m *tasks.Meta) {
 	if e.Runner == nil || m.Status != "running" || m.Stage == "merge" {
 		return // merge 阶段等待团队 webhook，不由 agent 执行
+	}
+	if !e.grounded(m) {
+		return // enforce 无据/不可达：已自动暂停
 	}
 	meta := *m
 	model := e.P.Model(meta.Stage) // 按 pipeline.yaml 声明选模型别名

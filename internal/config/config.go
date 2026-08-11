@@ -29,6 +29,14 @@ type LLMConfig struct {
 	APIKey   string `yaml:"api_key"`  // 经 env 注入，不落盘
 }
 
+// KBConfig KB grounding（18.3 依据检索，FINDING-016）。
+// Mode 默认 off：当前 KB 为空（FINDING-017），enforce 会暂停所有任务，故保守默认。
+type KBConfig struct {
+	Endpoint string `yaml:"endpoint"` // PieKBS REST（默认 http://127.0.0.1:8766）
+	APIKey   string `yaml:"api_key"`  // env CONTROL_KB_API_KEY 优先
+	Mode     string `yaml:"mode"`     // off | warn | enforce（默认 off）
+}
+
 type PathsConfig struct {
 	Home     string `yaml:"home"`      // 工作用户 home（默认 /home/dev）
 	GitDir   string `yaml:"repos_dir"` // ~/.repos
@@ -44,6 +52,7 @@ type Config struct {
 	LLM    LLMConfig    `yaml:"llm"`
 	Paths  PathsConfig  `yaml:"paths"`
 	Agent  AgentConfig  `yaml:"agent"`
+	KB     KBConfig     `yaml:"kb"`
 }
 
 type AgentConfig struct {
@@ -85,6 +94,7 @@ func defaults() *Config {
 		Server: ServerConfig{Host: "127.0.0.1", Port: 8765},
 		DB:     DBConfig{Path: filepath.Join(h, "data", "control.db")},
 		LLM:    LLMConfig{Endpoint: "http://litellm.internal:4000"},
+		KB:     KBConfig{Endpoint: "http://127.0.0.1:8766", Mode: "off"},
 		Agent: AgentConfig{
 			Bin:        "pi",
 			Models:     map[string]string{"cheap": "kimi-for-coding-highspeed", "coding": "kimi-for-coding", "heavy": "k3"},
@@ -142,6 +152,9 @@ func Load() (*Config, error) {
 	}
 	if v := os.Getenv("LITELLM_API_KEY"); v != "" {
 		cfg.LLM.APIKey = v
+	}
+	if v := os.Getenv("CONTROL_KB_API_KEY"); v != "" {
+		cfg.KB.APIKey = v
 	}
 	return cfg, nil
 }
