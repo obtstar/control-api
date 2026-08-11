@@ -1,11 +1,16 @@
 // Package pipeline 加载 orchestration/workflows/*.yaml，提供状态机流转。
 // 规则：每阶段一审批闸（18 章）；approval: required|auto|team_mr_review；
 // on_reject: retry（重做本阶段）| back_to_coding（打回编码）
+// 热加载（FINDING-008）：Load 后记录文件 mtime+size，每次访问前 stat 比对，
+// 变化则重新解析（含权力校验）；解析失败沿用旧配置并记日志，不打爆运行中的服务。
 package pipeline
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -31,15 +36,17 @@ const defaultFailureThreshold = 3
 
 // FailureThreshold 连败熔断阈值（缺省/为 0 时默认 3）
 func (p *Pipeline) FailureThreshold() int {
-	if p.CircuitBreaker.ConsecutiveFailures <= 0 {
+	_, cb := p.snapshot()
+	if cb.ConsecutiveFailures <= 0 {
 		return defaultFailureThreshold
 	}
-	return p.CircuitBreaker.ConsecutiveFailures
+	return cb.ConsecutiveFailures
 }
 
 // Model 返回阶段模型别名（默认 coding）
 func (p *Pipeline) Model(id string) string {
-	_, s := p.stage(id)
+	stages, _ := p.snapshot()
+	_, s := stageOf(stages, id)
 	if s == nil || s.Model == "" {
 		return "coding"
 	}
@@ -49,6 +56,11 @@ func (p *Pipeline) Model(id string) string {
 type Pipeline struct {
 	Stages         []Stage        `yaml:"-"`
 	CircuitBreaker CircuitBreaker `yaml:"-"`
+	// 热加载状态（Load 填充；手工构造的静态实例 path 为空 = 不热加载）
+	mu    sync.RWMutex
+	path  string
+	mtime time.Time
+	size  int64
 }
 
 type file struct {
@@ -59,6 +71,17 @@ type file struct {
 }
 
 func Load(path string) (*Pipeline, error) {
+	p, err := parseFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if info, err := os.Stat(path); err == nil {
+		p.path, p.mtime, p.size = path, info.ModTime(), info.Size()
+	}
+	return p, nil
+}
+
+func parseFile(path string) (*Pipeline, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("load pipeline: %w", err)
@@ -76,6 +99,45 @@ func Load(path string) (*Pipeline, error) {
 	return &Pipeline{Stages: f.Pipeline.Stages, CircuitBreaker: f.CircuitBreaker}, nil
 }
 
+// refresh 热加载检查：源文件 mtime/size 变化则重新解析；失败沿用旧配置（FINDING-008）。
+// 失败也推进 mtime，避免每次访问都重读坏文件刷日志；修复文件后 mtime 再变即恢复。
+func (p *Pipeline) refresh() {
+	if p.path == "" {
+		return // 手工构造的静态实例（测试）
+	}
+	info, err := os.Stat(p.path)
+	if err != nil {
+		return // stat 失败无法判断变化，沿用旧配置
+	}
+	p.mu.RLock()
+	stale := !info.ModTime().Equal(p.mtime) || info.Size() != p.size
+	p.mu.RUnlock()
+	if !stale {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if info.ModTime().Equal(p.mtime) && info.Size() == p.size {
+		return // 并发下已被其他 goroutine 刷新
+	}
+	np, err := parseFile(p.path)
+	if err != nil {
+		log.Printf("[pipeline] 热加载 %s 失败，沿用旧配置: %v", p.path, err)
+	} else {
+		p.Stages, p.CircuitBreaker = np.Stages, np.CircuitBreaker
+		log.Printf("[pipeline] 热加载 %s：%d 阶段", p.path, len(np.Stages))
+	}
+	p.mtime, p.size = info.ModTime(), info.Size()
+}
+
+// snapshot 热加载检查后读当前配置（所有访问器统一入口）
+func (p *Pipeline) snapshot() ([]Stage, CircuitBreaker) {
+	p.refresh()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.Stages, p.CircuitBreaker
+}
+
 // validateStages 权力模型加载校验：merge 阶段为终审闸，审批不得为 auto
 // （依据：control-center/docs/architecture/00-principles.md 每阶段一道审批闸 +
 // 18-authority.md merge 终审归团队 MR 评审，平台无权自动放行）。
@@ -90,38 +152,44 @@ func validateStages(stages []Stage) error {
 	return nil
 }
 
-func (p *Pipeline) stage(id string) (int, *Stage) {
-	for i := range p.Stages {
-		if p.Stages[i].ID == id {
-			return i, &p.Stages[i]
+func stageOf(stages []Stage, id string) (int, *Stage) {
+	for i := range stages {
+		if stages[i].ID == id {
+			return i, &stages[i]
 		}
 	}
 	return -1, nil
 }
 
 // First 返回首个阶段 id
-func (p *Pipeline) First() string { return p.Stages[0].ID }
+func (p *Pipeline) First() string {
+	stages, _ := p.snapshot()
+	return stages[0].ID
+}
 
 // IsLast 判断是否为末阶段
 func (p *Pipeline) IsLast(id string) bool {
-	return p.Stages[len(p.Stages)-1].ID == id
+	stages, _ := p.snapshot()
+	return stages[len(stages)-1].ID == id
 }
 
 // Next 返回下一阶段 id（末阶段返回空串）
 func (p *Pipeline) Next(id string) (string, error) {
-	i, s := p.stage(id)
+	stages, _ := p.snapshot()
+	i, s := stageOf(stages, id)
 	if s == nil {
 		return "", fmt.Errorf("未知阶段: %s", id)
 	}
-	if i == len(p.Stages)-1 {
+	if i == len(stages)-1 {
 		return "", nil
 	}
-	return p.Stages[i+1].ID, nil
+	return stages[i+1].ID, nil
 }
 
 // Approval 返回阶段审批方式（unknown → ""）
 func (p *Pipeline) Approval(id string) string {
-	_, s := p.stage(id)
+	stages, _ := p.snapshot()
+	_, s := stageOf(stages, id)
 	if s == nil {
 		return ""
 	}
@@ -139,7 +207,8 @@ func (p *Pipeline) NeedsApproval(id string) bool {
 
 // RejectTarget 驳回后的目标阶段（默认重做本阶段）
 func (p *Pipeline) RejectTarget(id string) string {
-	_, s := p.stage(id)
+	stages, _ := p.snapshot()
+	_, s := stageOf(stages, id)
 	if s != nil && s.OnReject == "back_to_coding" {
 		return "coding"
 	}

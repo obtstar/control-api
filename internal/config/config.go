@@ -12,8 +12,10 @@ import (
 )
 
 type ServerConfig struct {
-	Host   string `yaml:"host"`
-	Port   int    `yaml:"port"`
+	Host string `yaml:"host"`
+	Port int    `yaml:"port"`
+	// APIKey 运行时无消费方，仅占位/env 覆盖入口（CONTROL_API_KEY）；
+	// 密钥只经 env 注入，Save 强制写空不落盘（FINDING-010）
 	APIKey string `yaml:"api_key"`
 	// WebhookSecret merge webhook 共享密钥（X-Webhook-Token 头比对）；
 	// 空 = webhook 端点未启用（一律 503）。env CONTROL_WEBHOOK_SECRET 优先
@@ -26,7 +28,9 @@ type DBConfig struct {
 
 type LLMConfig struct {
 	Endpoint string `yaml:"endpoint"` // LiteLLM 网关
-	APIKey   string `yaml:"api_key"`  // 经 env 注入，不落盘
+	// APIKey 运行时无消费方，仅占位/env 覆盖入口（LITELLM_API_KEY）；
+	// 密钥只经 env 注入，Save 强制写空不落盘（FINDING-010）
+	APIKey string `yaml:"api_key"`
 }
 
 // KBConfig KB grounding（18.3 依据检索，FINDING-016）。
@@ -159,8 +163,13 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// Save 0600 落盘。密钥只经 env 注入：序列化前强制清空 server.api_key 与
+// llm.api_key，防止 env 覆盖进内存的密钥被回写落盘（FINDING-010）。
 func (c *Config) Save() error {
-	data, err := yaml.Marshal(c)
+	safe := *c
+	safe.Server.APIKey = ""
+	safe.LLM.APIKey = ""
+	data, err := yaml.Marshal(&safe)
 	if err != nil {
 		return err
 	}

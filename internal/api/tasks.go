@@ -4,6 +4,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 
 	"control-api/internal/authn"
 	"control-api/internal/tasks"
+
+	"gopkg.in/yaml.v3"
 )
 
 type createReq struct {
@@ -31,35 +34,35 @@ func (s *server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("title/body 必填"))
 		return
 	}
-	id, err := nextTaskID(s.cfg.Paths.TasksDir)
+	// 原子占号建目录（FINDING-009 竞态）：os.Mkdir 撞 EEXIST 才 +1 重试
+	id, dir, err := createTaskDir(s.cfg.Paths.TasksDir)
 	if err != nil {
 		writeErr(w, 500, err)
 		return
 	}
-	dir := filepath.Join(s.cfg.Paths.TasksDir, id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// frontmatter 用 yaml.Marshal 序列化（与 tasks.WriteMeta 同口径），
+	// title 含冒号/引号/换行不再产生非法 YAML（FINDING-009 注入）
+	fm, err := yaml.Marshal(tasks.Meta{
+		TaskID: id, Title: req.Title, RepoKey: req.RepoKey, Domain: req.Domain,
+		Status: "pending", Authority: "L1",
+	})
+	if err != nil {
 		writeErr(w, 500, err)
 		return
 	}
-	content := fmt.Sprintf(`---
-task_id: %s
-title: %s
-repo_key: %s
-domain: %s
-stage: ""
-status: pending
-authority: L1
----
-
-# %s
-
-%s
-`, id, req.Title, req.RepoKey, req.Domain, req.Title, req.Body)
+	content := fmt.Sprintf("---\n%s---\n\n# %s\n\n%s\n", fm, req.Title, req.Body)
 	if err := os.WriteFile(filepath.Join(dir, "task.md"), []byte(content), 0o644); err != nil {
 		writeErr(w, 500, err)
 		return
 	}
-	s.st.Log(id, "", "create", "human", "", req.Title)
+	operator := r.Header.Get("X-User") // FINDING-034：记真实操作人（同 taskAction 取法）
+	if operator == "" {
+		operator = "human"
+	}
+	// work_log 失败不回败主流程：task.md（权威）已落盘，记日志留痕（FINDING-032）
+	if err := s.st.Log(id, "", "create", operator, "", req.Title); err != nil {
+		log.Printf("[api] work_log 写入失败 %s: %v", id, err)
+	}
 	writeJSON(w, map[string]string{"task_id": id, "path": dir})
 }
 
@@ -129,20 +132,32 @@ func (s *server) listPendingApprovals(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, rows)
 }
 
-func nextTaskID(dir string) (string, error) {
-	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return "TASK-001", nil
+// createTaskDir 原子占用下一个任务 ID 并创建目录（FINDING-009 竞态）：
+// 先扫目录取起始编号，os.Mkdir（非 MkdirAll）撞 EEXIST 则 +1 重试，
+// 并发创建不会拿到同一 ID（Mkdir 的 EEXIST 即占号成功的判据）。
+func createTaskDir(root string) (id, dir string, err error) {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", "", err
 	}
+	next := 1
+	entries, err := os.ReadDir(root)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	max := 0
 	for _, e := range entries {
 		var n int
-		if _, err := fmt.Sscanf(e.Name(), "TASK-%03d", &n); err == nil && n > max {
-			max = n
+		if _, err := fmt.Sscanf(e.Name(), "TASK-%03d", &n); err == nil && n >= next {
+			next = n + 1
 		}
 	}
-	return fmt.Sprintf("TASK-%03d", max+1), nil
+	for {
+		id = fmt.Sprintf("TASK-%03d", next)
+		dir = filepath.Join(root, id)
+		if err := os.Mkdir(dir, 0o755); err == nil {
+			return id, dir, nil
+		} else if !os.IsExist(err) {
+			return "", "", fmt.Errorf("创建任务目录 %s: %w", dir, err)
+		}
+		next++
+	}
 }

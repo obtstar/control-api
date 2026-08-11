@@ -64,7 +64,10 @@ func (e *Engine) handleRunFailure(m *tasks.Meta, model string, runErr error) {
 	}
 	failures++ // 含本次
 	detail := fmt.Sprintf("第 %d 次失败: %v", failures, runErr)
-	e.St.Log(m.TaskID, m.Stage, store.ActionAgentError, "agent", model, detail)
+	// 失败处理路径无法上抛错误：连败计数可能漏记一次，记日志留痕（FINDING-032）
+	if err := e.St.Log(m.TaskID, m.Stage, store.ActionAgentError, "agent", model, detail); err != nil {
+		log.Printf("[engine] work_log 写入失败 %s: %v", m.TaskID, err)
+	}
 	fresh := e.reload(m.TaskID)
 	if fresh == nil {
 		return
