@@ -1,4 +1,4 @@
-// Package engine 状态机动作处理：approve/reject/pause/resume
+// Package engine 状态机动作处理：approve/reject/pause/resume + merge webhook（MarkMerged）
 // 状态流转全部记 work_log（hash 链）；暂停为最高运行时权限（18 章）
 package engine
 
@@ -112,13 +112,38 @@ func (e *Engine) Advance(m *tasks.Meta, artifact string) error {
 	if err != nil {
 		return err
 	}
-	m.Stage = next
-	m.Status = "running"
-	return e.commit(m, "auto_advance", next)
+	return e.enterNext(m, next, "auto_advance", next)
 }
 
-// Approve 批准：记录裁决后推进到下一阶段
+// enterNext 进入下一阶段：team_mr_review 终审无 agent 执行，直接入待审批队列等
+// 合并 webhook；其余阶段置 running 并交由 maybeRun 驱动（next=="" 即末阶段 → delivered）
+func (e *Engine) enterNext(m *tasks.Meta, next, action, detail string) error {
+	if next == "" {
+		m.Status = "delivered"
+		return e.commit(m, "deliver", detail)
+	}
+	m.Stage = next
+	if e.P.IsTeamReview(next) {
+		m.Status = "awaiting_approval"
+		if err := e.St.NewApproval(m.TaskID, next, roleFor(next), detail); err != nil {
+			return err
+		}
+		return e.commit(m, action, detail)
+	}
+	m.Status = "running"
+	if err := e.commit(m, action, detail); err != nil {
+		return err
+	}
+	e.maybeRun(m)
+	return nil
+}
+
+// Approve 批准：记录裁决后推进到下一阶段。
+// merge 阶段（team_mr_review 终审）不接受 Web 审批，等团队合并 webhook 回传。
 func (e *Engine) Approve(m *tasks.Meta, comment, by string) error {
+	if e.P.IsTeamReview(m.Stage) {
+		return fmt.Errorf("%s 阶段为团队 MR 终审，Web 审批无效，等合并 webhook 回传", m.Stage)
+	}
 	if m.Status != "awaiting_approval" {
 		return fmt.Errorf("任务不在待审批状态: %s", m.Status)
 	}
@@ -132,21 +157,16 @@ func (e *Engine) Approve(m *tasks.Meta, comment, by string) error {
 	if err != nil {
 		return err
 	}
-	if next == "" {
-		m.Status = "delivered"
-		return e.commit(m, "deliver", comment)
-	}
-	m.Stage = next
-	m.Status = "running"
-	if err := e.commit(m, "approved→"+next, comment); err != nil {
-		return err
-	}
-	e.maybeRun(m) // 批准后自动执行新阶段
-	return nil
+	return e.enterNext(m, next, "approved→"+next, comment)
 }
 
-// Reject 驳回（必附批注）：按 on_reject 回退；仅 awaiting_approval 状态可驳回
+// Reject 驳回（必附批注）：按 on_reject 回退；仅 awaiting_approval 状态可驳回。
+// merge 阶段（team_mr_review 终审）不接受 Web 驳回；其未声明 on_reject，
+// 走 RejectTarget 默认（重做本阶段）也无意义，故直接拒绝。
 func (e *Engine) Reject(m *tasks.Meta, comment, by string) error {
+	if e.P.IsTeamReview(m.Stage) {
+		return fmt.Errorf("%s 阶段为团队 MR 终审，Web 驳回无效，请在 Git 平台评审", m.Stage)
+	}
 	if m.Status != "awaiting_approval" {
 		return fmt.Errorf("任务不在待审批状态: %s", m.Status)
 	}
@@ -184,14 +204,44 @@ func (e *Engine) Resume(m *tasks.Meta, by string) error {
 	return nil
 }
 
+// MarkMerged 团队 MR 终审合并回传（merge webhook，FINDING-003）：
+// 仅 merge 阶段 awaiting_approval 可流转；状态置 merged（operator 记 webhook）
+// 后按现有 auto 机制推进 deliver（deliver 为 auto 阶段，maybeRun 拉起 agent 走完即 delivered）。
+func (e *Engine) MarkMerged(taskID, detail string) error {
+	m := e.reload(taskID)
+	if m == nil {
+		return fmt.Errorf("任务不存在: %s", taskID)
+	}
+	if m.Stage != "merge" || m.Status != "awaiting_approval" {
+		return fmt.Errorf("任务不在 merge 等待态: stage=%s status=%s", m.Stage, m.Status)
+	}
+	if err := e.St.Decide(m.TaskID, m.Stage, "approved", detail, "webhook"); err != nil {
+		return err
+	}
+	m.Status = "merged"
+	if err := e.commitAs(m, "merged", "webhook", detail); err != nil {
+		return err
+	}
+	next, err := e.P.Next(m.Stage)
+	if err != nil {
+		return err
+	}
+	return e.enterNext(m, next, "merged→"+next, detail)
+}
+
 func (e *Engine) commit(m *tasks.Meta, action, detail string) error {
+	return e.commitAs(m, action, detailActor(detail), detail)
+}
+
+// commitAs 状态落盘三件套：task.md（权威）→ task_index（派生）→ work_log（hash 链）
+func (e *Engine) commitAs(m *tasks.Meta, action, operator, detail string) error {
 	if err := tasks.WriteMeta(m); err != nil { // frontmatter 为权威
 		return err
 	}
 	if err := e.St.UpsertTask(m); err != nil { // 索引为派生
 		return err
 	}
-	return e.St.Log(m.TaskID, m.Stage, action, detailActor(detail), "", detail)
+	return e.St.Log(m.TaskID, m.Stage, action, operator, "", detail)
 }
 
 func detailActor(detail string) string { return "agent" }

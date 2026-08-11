@@ -62,6 +62,7 @@ func Serve(cfg *config.Config) error {
 	mux.HandleFunc("GET /api/approvals/pending", s.listPendingApprovals)
 	mux.HandleFunc("GET /api/audit", s.listLogs)
 	mux.HandleFunc("GET /api/findings", s.listFindings)
+	mux.HandleFunc("POST /api/webhooks/merge-event", s.mergeEvent) // 独立密钥认证，见 webhook.go
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	log.Printf("control-api listening on %s（pipeline: %d 阶段）", addr, len(pl.Stages))

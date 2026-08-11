@@ -26,11 +26,12 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"token": token, "username": user.Username, "role": user.Role})
 }
 
-// withAuth 鉴权中间件：/actuator/health 与 /api/auth/login 放行
+// withAuth 鉴权中间件：/actuator/health、/api/auth/login 与 /api/webhooks/ 放行
+// （webhook 走独立共享密钥认证，在 handler 内自验，不用 Bearer 会话）
 func (s *server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if p == "/actuator/health" || p == "/api/auth/login" {
+		if p == "/actuator/health" || p == "/api/auth/login" || strings.HasPrefix(p, "/api/webhooks/") {
 			next.ServeHTTP(w, r)
 			return
 		}

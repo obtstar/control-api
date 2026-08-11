@@ -15,6 +15,9 @@ type ServerConfig struct {
 	Host   string `yaml:"host"`
 	Port   int    `yaml:"port"`
 	APIKey string `yaml:"api_key"`
+	// WebhookSecret merge webhook 共享密钥（X-Webhook-Token 头比对）；
+	// 空 = webhook 端点未启用（一律 503）。env CONTROL_WEBHOOK_SECRET 优先
+	WebhookSecret string `yaml:"webhook_secret"`
 }
 
 type DBConfig struct {
@@ -130,6 +133,9 @@ func Load() (*Config, error) {
 	}
 	if v := os.Getenv("CONTROL_API_KEY"); v != "" {
 		cfg.Server.APIKey = v
+	}
+	if v := os.Getenv("CONTROL_WEBHOOK_SECRET"); v != "" {
+		cfg.Server.WebhookSecret = v
 	}
 	if v := os.Getenv("LITELLM_ENDPOINT"); v != "" {
 		cfg.LLM.Endpoint = strings.TrimRight(v, "/")

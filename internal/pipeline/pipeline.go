@@ -12,9 +12,11 @@ import (
 
 type Stage struct {
 	ID       string `yaml:"id"`
-	Approval string `yaml:"approval"`  // required | auto | gitlab/team_mr_review
+	Approval string `yaml:"approval"`  // required | auto | team_mr_review
 	OnReject string `yaml:"on_reject"` // retry | back_to_coding
 	Model    string `yaml:"model"`     // LiteLLM 别名：cheap/coding/heavy（空=coding）
+	Webhook  string `yaml:"webhook"`   // 终审回传事件名（如 merge_event，仅声明）
+	DoneWhen string `yaml:"done_when"` // 完成判据（如 merged_by_teammate，仅声明）
 }
 
 // CircuitBreaker 任务级熔断（pipeline.yaml 顶层 circuit_breaker 段）
@@ -100,10 +102,22 @@ func (p *Pipeline) Next(id string) (string, error) {
 	return p.Stages[i+1].ID, nil
 }
 
-// NeedsApproval 该阶段完成是否需要人工审批（auto 直接过闸）
-func (p *Pipeline) NeedsApproval(id string) bool {
+// Approval 返回阶段审批方式（unknown → ""）
+func (p *Pipeline) Approval(id string) string {
 	_, s := p.stage(id)
-	return s != nil && s.Approval == "required"
+	if s == nil {
+		return ""
+	}
+	return s.Approval
+}
+
+// IsTeamReview 阶段终审走团队 MR（Web 审批无效，等合并 webhook 回传）
+func (p *Pipeline) IsTeamReview(id string) bool { return p.Approval(id) == "team_mr_review" }
+
+// NeedsApproval 该阶段完成是否需要审批（required 人工 / team_mr_review 团队 MR 终审）
+func (p *Pipeline) NeedsApproval(id string) bool {
+	a := p.Approval(id)
+	return a == "required" || a == "team_mr_review"
 }
 
 // RejectTarget 驳回后的目标阶段（默认重做本阶段）
