@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"control-api/internal/agent"
@@ -25,6 +26,8 @@ type server struct {
 	st   *store.Store
 	eng  *engine.Engine
 	auth *authn.Auth
+	// searcher KB 检索（web 检索视图）：kb.endpoint 非空即装配，不受 grounding mode 门控
+	searcher kb.Searcher
 }
 
 // route 一条路由注册项：pattern 为 Go 1.22 mux 模式（"METHOD /path"）
@@ -45,6 +48,8 @@ func (s *server) routes() []route {
 		{"GET /api/approvals/pending", s.listPendingApprovals},
 		{"GET /api/audit", s.listLogs},
 		{"GET /api/findings", s.listFindings},
+		{"GET /api/kb/search", s.searchKB},
+		{"GET /api/openapi.yaml", s.serveOpenAPI},
 		{"POST /api/webhooks/merge-event", s.mergeEvent}, // 独立密钥认证，见 webhook.go
 	}
 }
@@ -66,10 +71,15 @@ func Serve(cfg *config.Config) error {
 	s.eng.SetTasksDir(cfg.Paths.TasksDir)
 	s.eng.Runner = &agent.Runner{Cfg: cfg.Agent}
 
-	// KB grounding（18.3，FINDING-016）：mode off 或 endpoint 空 = 不注入，零行为变化
-	if cfg.KB.Mode != "" && cfg.KB.Mode != "off" && cfg.KB.Endpoint != "" {
-		s.eng.Searcher = &kb.RESTSearcher{Endpoint: cfg.KB.Endpoint, APIKey: cfg.KB.APIKey}
-		s.eng.KBMode = cfg.KB.Mode
+	// KB 检索：endpoint 非空即装配（web 检索视图，与 mode 无关）；
+	// KB grounding（18.3，FINDING-016）：mode off = 不注入 engine，零行为变化
+	if cfg.KB.Endpoint != "" {
+		rs := &kb.RESTSearcher{Endpoint: cfg.KB.Endpoint, APIKey: cfg.KB.APIKey}
+		s.searcher = rs
+		if cfg.KB.Mode != "" && cfg.KB.Mode != "off" {
+			s.eng.Searcher = rs
+			s.eng.KBMode = cfg.KB.Mode
+		}
 	}
 
 	// 任务目录索引：启动全量同步 + fsnotify 增量
@@ -175,4 +185,50 @@ func parseFindings(data []byte) []finding {
 		findings = append(findings, f)
 	}
 	return findings
+}
+
+// ── KB 检索端点 ─────────────────────────────────────────────
+
+// searchKB GET /api/kb/search：代理 PieKBS REST 检索（web 检索视图）。
+// endpoint 未配置 503；PieKBS 非 200/超时/解析错 502 并带原因摘要；q 空/limit 非法 400。
+func (s *server) searchKB(w http.ResponseWriter, r *http.Request) {
+	if s.searcher == nil {
+		writeErr(w, 503, errString("kb.endpoint 未配置，KB 检索不可用"))
+		return
+	}
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		writeErr(w, 400, errString("缺少检索词 q"))
+		return
+	}
+	limit := 10
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			writeErr(w, 400, fmt.Errorf("limit 非法: %q", v))
+			return
+		}
+		limit = n
+	}
+	hits, err := s.searcher.Search(r.Context(), q, limit)
+	if err != nil {
+		writeErr(w, 502, fmt.Errorf("KB 检索失败: %w", err))
+		return
+	}
+	if hits == nil {
+		hits = []kb.Hit{}
+	}
+	writeJSON(w, hits)
+}
+
+// serveOpenAPI GET /api/openapi.yaml：自指端点，服务契约文件本体（文档即实现）
+func (s *server) serveOpenAPI(w http.ResponseWriter, r *http.Request) {
+	path := filepath.Join(s.cfg.Paths.Home, "control-api", "docs", "api", "openapi.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		writeErr(w, 500, fmt.Errorf("读取 openapi.yaml: %w", err))
+		return
+	}
+	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w.Write(data)
 }

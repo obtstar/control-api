@@ -224,3 +224,32 @@ func TestWebhookBypassesBearerAuth(t *testing.T) {
 		t.Fatalf("webhook 应走独立密钥认证（不受 Bearer 拦截），status = %d", w.Code)
 	}
 }
+
+// ── openapi.yaml 自指端点 ───────────────────────────────────
+
+// GET /api/openapi.yaml：200 返回契约本体（home 指向多仓根，即测试工作目录上三级）
+func TestServeOpenAPI(t *testing.T) {
+	t.Run("200 返回契约文件原文", func(t *testing.T) {
+		s := &server{cfg: &config.Config{Paths: config.PathsConfig{Home: "../../.."}}}
+		w := httptest.NewRecorder()
+		s.serveOpenAPI(w, httptest.NewRequest(http.MethodGet, "/api/openapi.yaml", nil))
+		if w.Code != 200 {
+			t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+		}
+		if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "text/yaml") {
+			t.Fatalf("Content-Type = %s, want text/yaml", ct)
+		}
+		if !strings.Contains(w.Body.String(), "openapi: 3.1.0") {
+			t.Fatalf("响应应含契约头 openapi: 3.1.0: %.80s", w.Body.String())
+		}
+	})
+
+	t.Run("契约文件缺失返回 500", func(t *testing.T) {
+		s := &server{cfg: &config.Config{Paths: config.PathsConfig{Home: t.TempDir()}}}
+		w := httptest.NewRecorder()
+		s.serveOpenAPI(w, httptest.NewRequest(http.MethodGet, "/api/openapi.yaml", nil))
+		if w.Code != 500 {
+			t.Fatalf("status = %d, want 500, body=%s", w.Code, w.Body.String())
+		}
+	})
+}

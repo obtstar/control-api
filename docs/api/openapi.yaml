@@ -296,6 +296,88 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /kb/search:
+    get:
+      summary: KB 检索
+      description: |
+        代理 PieKBS REST（GET {kb.endpoint}/api/search）的全文检索，web 为检索视图。
+        与 engine KB grounding 的 mode 门控无关：只要 kb.endpoint 非空即可用。
+        kb.endpoint 未配置（空）时 503；PieKBS 不可达、返回非 200 或响应解析失败时
+        502 并在 error 中带原因摘要。
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+          description: 检索词（去空白后非空，否则 400）
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 10
+          description: 返回条数上限（默认 10；非正整数时 400）
+      responses:
+        '200':
+          description: 命中列表（无命中返回空数组）
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/KBHit'
+        '400':
+          description: q 为空或 limit 非法
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: KB 不可达或 PieKBS 报错/响应解析失败（error 带原因摘要）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: kb.endpoint 未配置
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /openapi.yaml:
+    get:
+      summary: OpenAPI 契约文件本体
+      description: |
+        自指端点：文档即实现。返回本服务实际实现的契约文件
+        docs/api/openapi.yaml 原文（text/yaml），供前端 API 文档页（Scalar）渲染。
+      responses:
+        '200':
+          description: 契约文件原文
+          content:
+            text/yaml:
+              schema:
+                type: string
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 契约文件读取失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -581,6 +663,31 @@ components:
       required:
         - task_id
         - status
+
+    KBHit:
+      type: object
+      properties:
+        id:
+          type: string
+          description: 文档 ID
+        path:
+          type: string
+          description: 文档路径（KB 内相对路径）
+        title:
+          type: string
+          description: 文档标题
+        layer:
+          type: string
+          description: 文档层（如 raw/wiki）
+        kind:
+          type: string
+          description: 文档类型（如 page/concept）
+        snippet:
+          type: string
+          description: 命中摘要（可缺席）
+      required:
+        - id
+        - title
 
     Error:
       type: object

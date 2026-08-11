@@ -15,6 +15,7 @@ import (
 	"control-api/internal/authn"
 	"control-api/internal/config"
 	"control-api/internal/engine"
+	"control-api/internal/kb"
 	"control-api/internal/store"
 	"control-api/internal/tasks"
 )
@@ -181,5 +182,81 @@ func TestContractTaskActionResponse(t *testing.T) {
 	contractSpec(t).validateJSON(t, http.MethodPost, "/api/tasks/{id}/action", 200, w.Body.Bytes())
 	if got := fmt.Sprintf("%s", w.Body); !strings.Contains(got, `"status":"paused"`) {
 		t.Fatalf("pause 后状态应 paused: %s", got)
+	}
+}
+
+// ── KB 检索端点 ─────────────────────────────────────────────
+
+// newKBServer 构造带 fake PieKBS 的测试服务（httptest 实测，不 mock Searcher）
+func newKBServer(t *testing.T, status int, body string) *server {
+	t.Helper()
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(fake.Close)
+	return &server{searcher: &kb.RESTSearcher{Endpoint: fake.URL}}
+}
+
+const kbHitsBody = `{"results":[{"id":"p1","path":"wiki/a.md","title":"架构原则",` +
+	`"layer":"raw","kind":"page","snippet":"AI 驱动执行"}],"conflicts":[]}`
+
+// GET /api/kb/search 200 用例：命中经契约 schema 校验；空结果返回空数组而非 null
+func TestSearchKB(t *testing.T) {
+	t.Run("命中返回 KBHit 数组并通过契约校验", func(t *testing.T) {
+		s := newKBServer(t, 200, kbHitsBody)
+		w := httptest.NewRecorder()
+		s.searchKB(w, httptest.NewRequest(http.MethodGet, "/api/kb/search?q=架构&limit=5", nil))
+		if w.Code != 200 {
+			t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+		}
+		contractSpec(t).validateJSON(t, http.MethodGet, "/api/kb/search", 200, w.Body.Bytes())
+	})
+
+	t.Run("空结果返回空数组而非 null", func(t *testing.T) {
+		s := newKBServer(t, 200, `{"results":[]}`)
+		w := httptest.NewRecorder()
+		s.searchKB(w, httptest.NewRequest(http.MethodGet, "/api/kb/search?q=无命中", nil))
+		if w.Code != 200 {
+			t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+		}
+		if got := strings.TrimSpace(w.Body.String()); got != "[]" {
+			t.Fatalf("body = %s, want []", got)
+		}
+	})
+}
+
+// GET /api/kb/search 错误用例：piekbs 报错→502（带原因）、未配置→503、参数非法→400
+func TestSearchKBErrors(t *testing.T) {
+	cases := []struct {
+		name       string
+		noSearcher bool // true = endpoint 未配置
+		upStatus   int
+		upBody     string
+		url        string
+		want       int
+		wantSub    string
+	}{
+		{"piekbs 非 200 映射 502 并带原因摘要", false, 500, "index broken", "/api/kb/search?q=x", 502, "index broken"},
+		{"piekbs 响应非法 JSON 映射 502", false, 200, "not json", "/api/kb/search?q=x", 502, ""},
+		{"endpoint 未配置 503", true, 0, "", "/api/kb/search?q=x", 503, ""},
+		{"q 为空 400", false, 200, `{"results":[]}`, "/api/kb/search?q=%20", 400, ""},
+		{"limit 非法 400", false, 200, `{"results":[]}`, "/api/kb/search?q=x&limit=abc", 400, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := &server{}
+			if !c.noSearcher {
+				s = newKBServer(t, c.upStatus, c.upBody)
+			}
+			w := httptest.NewRecorder()
+			s.searchKB(w, httptest.NewRequest(http.MethodGet, c.url, nil))
+			if w.Code != c.want {
+				t.Fatalf("status = %d, want %d, body=%s", w.Code, c.want, w.Body.String())
+			}
+			if c.wantSub != "" && !strings.Contains(w.Body.String(), c.wantSub) {
+				t.Fatalf("body 应含 %q: %s", c.wantSub, w.Body.String())
+			}
+		})
 	}
 }
