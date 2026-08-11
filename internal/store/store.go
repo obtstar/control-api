@@ -20,7 +20,9 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+	// _txlock=immediate：事务在 Begin 即取写锁（配合 busy_timeout 排队），
+	// 避免 deferred 事务先读后写在并发升级时收到 SQLITE_BUSY_SNAPSHOT（FINDING-005）
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}

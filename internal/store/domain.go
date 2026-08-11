@@ -2,8 +2,7 @@
 package store
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -64,17 +63,31 @@ ORDER BY t.updated_at DESC`)
 	return out, rows.Err()
 }
 
-// Log 写入 work_log（hash 链：entry_hash = sha256(prev_hash + 内容)）
+// Log 写入 work_log（hash 链：entry_hash = sha256(prev_hash + 内容)）。
+// prev 读取与 INSERT 放在同一事务（连接串 _txlock=immediate，Begin 即取写锁），
+// 串行化并发写，避免两条记录引用同一 prev 造成分叉链（FINDING-005）。
 func (s *Store) Log(taskID, stage, action, operator, model, detail string) error {
+	tx, err := s.Begin()
+	if err != nil {
+		return fmt.Errorf("work_log 链事务: %w", err)
+	}
+	defer tx.Rollback()
 	var prev string
-	s.QueryRow(`SELECT entry_hash FROM work_log ORDER BY id DESC LIMIT 1`).Scan(&prev)
-	body := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s", prev, taskID, stage, action, operator, model, detail)
-	sum := sha256.Sum256([]byte(body))
-	_, err := s.Exec(`
+	err = tx.QueryRow(`SELECT entry_hash FROM work_log ORDER BY id DESC LIMIT 1`).Scan(&prev)
+	if err == sql.ErrNoRows {
+		prev = "" // 创世行（重置续接的首行由外部归档注入，不经此路径）
+	} else if err != nil {
+		return fmt.Errorf("work_log 读 prev_hash: %w", err)
+	}
+	_, err = tx.Exec(`
 INSERT INTO work_log (task_id, stage, action, operator, model, detail, prev_hash, entry_hash)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		taskID, stage, action, operator, model, detail, prev, hex.EncodeToString(sum[:]))
-	return err
+		taskID, stage, action, operator, model, detail, prev,
+		entryHash(prev, taskID, stage, action, operator, model, detail))
+	if err != nil {
+		return fmt.Errorf("work_log 写入: %w", err)
+	}
+	return tx.Commit()
 }
 
 // ActionAgentError 阶段执行失败写入的 work_log action（连败计数以此为据）
