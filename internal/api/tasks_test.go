@@ -37,6 +37,9 @@ func postCreate(t *testing.T, s *server, body, xUser string) (int, map[string]st
 	}
 	w := httptest.NewRecorder()
 	s.createTask(w, r)
+	if w.Code == 200 { // 契约校验：CreateTaskResponse
+		contractSpec(t).validateJSON(t, http.MethodPost, "/api/tasks", 200, w.Body.Bytes())
+	}
 	var resp map[string]string
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("响应非 JSON: %s", w.Body.String())

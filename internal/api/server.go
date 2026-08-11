@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"control-api/internal/agent"
 	"control-api/internal/authn"
@@ -24,6 +25,28 @@ type server struct {
 	st   *store.Store
 	eng  *engine.Engine
 	auth *authn.Auth
+}
+
+// route 一条路由注册项：pattern 为 Go 1.22 mux 模式（"METHOD /path"）
+type route struct {
+	pattern string
+	handler http.HandlerFunc
+}
+
+// routes 路由表：Serve 遍历注册；契约对账测试（contract_test.go）直接枚举本表，
+// 新增端点必须同步 docs/api/openapi.yaml，否则对账 FAIL。
+func (s *server) routes() []route {
+	return []route{
+		{"GET /actuator/health", s.health}, // 探活端点，契约豁免（见 contract_test.go knownExemptions）
+		{"POST /api/auth/login", s.login},
+		{"GET /api/tasks", s.listTasks},
+		{"POST /api/tasks", s.createTask},
+		{"POST /api/tasks/{id}/action", s.taskAction},
+		{"GET /api/approvals/pending", s.listPendingApprovals},
+		{"GET /api/audit", s.listLogs},
+		{"GET /api/findings", s.listFindings},
+		{"POST /api/webhooks/merge-event", s.mergeEvent}, // 独立密钥认证，见 webhook.go
+	}
 }
 
 func Serve(cfg *config.Config) error {
@@ -61,15 +84,9 @@ func Serve(cfg *config.Config) error {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /actuator/health", s.health)
-	mux.HandleFunc("POST /api/auth/login", s.login)
-	mux.HandleFunc("GET /api/tasks", s.listTasks)
-	mux.HandleFunc("POST /api/tasks", s.createTask)
-	mux.HandleFunc("POST /api/tasks/{id}/action", s.taskAction)
-	mux.HandleFunc("GET /api/approvals/pending", s.listPendingApprovals)
-	mux.HandleFunc("GET /api/audit", s.listLogs)
-	mux.HandleFunc("GET /api/findings", s.listFindings)
-	mux.HandleFunc("POST /api/webhooks/merge-event", s.mergeEvent) // 独立密钥认证，见 webhook.go
+	for _, r := range s.routes() {
+		mux.HandleFunc(r.pattern, r.handler)
+	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	log.Printf("control-api listening on %s（pipeline: %d 阶段）", addr, len(pl.Stages))
@@ -111,4 +128,51 @@ func (s *server) listLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, rows)
+}
+
+// ── 问题一览端点 ─────────────────────────────────────────────
+
+type finding struct {
+	ID         string `json:"id"`
+	Date       string `json:"date"`
+	Source     string `json:"source"`
+	Phenomenon string `json:"phenomenon"`
+	Evidence   string `json:"evidence"`
+	Impact     string `json:"impact"`
+	Status     string `json:"status"`
+	Target     string `json:"target"`
+}
+
+// listFindings GET /api/findings：每次请求实时解析 FINDINGS.md 权威表（文件极小，不做缓存）
+func (s *server) listFindings(w http.ResponseWriter, r *http.Request) {
+	path := filepath.Join(s.cfg.Paths.Home, "control-center", "docs", "FINDINGS.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		writeErr(w, 500, fmt.Errorf("读取 FINDINGS.md: %w", err))
+		return
+	}
+	writeJSON(w, parseFindings(data))
+}
+
+// parseFindings 解析 Markdown 表格数据行；表头/分隔行/非 FINDING 开头行/列数不足行跳过
+func parseFindings(data []byte) []finding {
+	findings := make([]finding, 0)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "| FINDING-") {
+			continue
+		}
+		cells := strings.Split(line, "|")
+		// 整行形如 "| c1 | c2 | ... | c8 |"：首尾为空串，8 列需至少 10 段
+		if len(cells) < 10 {
+			continue
+		}
+		f := finding{}
+		dst := []*string{&f.ID, &f.Date, &f.Source, &f.Phenomenon, &f.Evidence, &f.Impact, &f.Status, &f.Target}
+		for i, p := range dst {
+			*p = strings.TrimSpace(cells[i+1])
+		}
+		findings = append(findings, f)
+	}
+	return findings
 }
