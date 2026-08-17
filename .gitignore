@@ -1,4 +1,4 @@
-control-api
+/control-api
 *.db
 *.db-wal
 *.db-shm
