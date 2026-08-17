@@ -115,6 +115,26 @@ func (s *Store) ConsecutiveFailures(taskID string) (int, error) {
 	return n, rows.Err()
 }
 
+// LastFailureAt 返回任务最近一次 agent_error 的时间；无失败记录返回零值。
+// created_at 经驱动归一化为 RFC3339（兼容解析旧式 "YYYY-MM-DD HH:MM:SS" 文本）。
+func (s *Store) LastFailureAt(taskID string) (time.Time, error) {
+	var ts string
+	err := s.QueryRow(`SELECT created_at FROM work_log WHERE task_id=? AND action=?
+	                   ORDER BY id DESC LIMIT 1`, taskID, ActionAgentError).Scan(&ts)
+	if err == sql.ErrNoRows {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("last failure %s: %w", taskID, err)
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05"} {
+		if t, err := time.Parse(layout, ts); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("解析 work_log 时间 %q: 非常见格式", ts)
+}
+
 type LogRow struct {
 	ID        int64  `json:"id"`
 	TaskID    string `json:"task_id"`

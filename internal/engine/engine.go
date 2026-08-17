@@ -76,7 +76,13 @@ func (e *Engine) handleRunFailure(m *tasks.Meta, model string, runErr error) {
 		fresh.Status = "paused" // 连败熔断自动暂停
 		e.commit(fresh, "auto_pause", detail)
 		if e.P.CircuitBreaker.Action == "auto_pause_and_notify" {
-			log.Printf("[engine] notify: 任务 %s 连败 %d 次已自动暂停", m.TaskID, failures)
+			// FINDING-027：notify 通道 = work_log notify 条目（web 审计/看板可见）+ 日志；
+			// 接入 IM/邮件等外部通道时在此扩展
+			msg := fmt.Sprintf("任务 %s 连败 %d 次熔断暂停，请人工介入", m.TaskID, failures)
+			if err := e.St.Log(m.TaskID, m.Stage, "notify", "agent", model, msg); err != nil {
+				log.Printf("[engine] notify 落库失败 %s: %v", m.TaskID, err)
+			}
+			log.Printf("[engine] notify: %s", msg)
 		}
 		return
 	}

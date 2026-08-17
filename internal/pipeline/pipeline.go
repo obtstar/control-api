@@ -29,10 +29,16 @@ type CircuitBreaker struct {
 	ConsecutiveFailures int    `yaml:"consecutive_failures"`  // 连败阈值（<=0 时按默认 3）
 	TokenBudgetPerTask  int    `yaml:"token_budget_per_task"` // 声明项，暂未执行
 	Action              string `yaml:"action"`                // auto_pause_and_notify 等，均按 auto pause 处理
+	// RetryBackoffSeconds 连败自动重试退避表（秒，FINDING-027）：
+	// 第 n 次失败后等待 list[min(n-1, len-1)] 秒重跑；空表按 defaultRetryBackoff
+	RetryBackoffSeconds []int `yaml:"retry_backoff_seconds"`
 }
 
 // defaultFailureThreshold CircuitBreaker 缺省连败阈值
 const defaultFailureThreshold = 3
+
+// defaultRetryBackoff 缺省退避表：第 1 次 30s、第 2 次起 60s
+var defaultRetryBackoff = []int{30, 60}
 
 // FailureThreshold 连败熔断阈值（缺省/为 0 时默认 3）
 func (p *Pipeline) FailureThreshold() int {
@@ -41,6 +47,26 @@ func (p *Pipeline) FailureThreshold() int {
 		return defaultFailureThreshold
 	}
 	return cb.ConsecutiveFailures
+}
+
+// RetryBackoff 第 failures 次失败后的重试等待时长（failures>=1）
+func (p *Pipeline) RetryBackoff(failures int) time.Duration {
+	_, cb := p.snapshot()
+	list := cb.RetryBackoffSeconds
+	if len(list) == 0 {
+		list = defaultRetryBackoff
+	}
+	i := failures - 1
+	if i < 0 {
+		i = 0
+	}
+	if i >= len(list) {
+		i = len(list) - 1
+	}
+	if list[i] <= 0 {
+		list[i] = 30
+	}
+	return time.Duration(list[i]) * time.Second
 }
 
 // Model 返回阶段模型别名（默认 coding）

@@ -94,6 +94,8 @@ func Serve(cfg *config.Config) error {
 	if err := watcher.Watch(cfg.Paths.TasksDir, st, done); err != nil {
 		log.Printf("[api] watcher 不可用: %v（退化为启动时同步）", err)
 	}
+	// 熔断后自动重试扫描（FINDING-027）：pending + 连败未达阈值 + 退避到期 → 重跑
+	go s.eng.StartRetryLoop(done)
 
 	mux := http.NewServeMux()
 	for _, r := range s.routes() {
