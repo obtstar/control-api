@@ -89,6 +89,8 @@ func Serve(cfg *config.Config) error {
 	if err := watcher.Sync(cfg.Paths.TasksDir, st); err != nil {
 		log.Printf("[api] 初始同步: %v", err)
 	}
+	// 启动回收僵尸 running 任务（FINDING-043）：自动暂停留痕，人工 resume 恢复
+	s.eng.RecoverOnBoot()
 	done := make(chan struct{})
 	defer close(done)
 	if err := watcher.Watch(cfg.Paths.TasksDir, st, done); err != nil {

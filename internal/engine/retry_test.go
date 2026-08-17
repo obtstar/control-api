@@ -102,3 +102,33 @@ func TestRetryOnce(t *testing.T) {
 		})
 	}
 }
+
+// 启动回收（FINDING-043）：重启后 running 任务的执行 goroutine 已死，
+// RecoverOnBoot 将其自动暂停（18 章：暂停最高权限）留待人工 resume；
+// 其他状态一律不动。
+func TestRecoverOnBoot(t *testing.T) {
+	cases := []struct {
+		status     string
+		wantStatus string
+	}{
+		{"running", "paused"},
+		{"awaiting_approval", "awaiting_approval"},
+		{"paused", "paused"},
+		{"pending", "pending"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.status, func(t *testing.T) {
+			e, st := newRetryEnv(t, tt.status)
+			e.RecoverOnBoot()
+			if got := readStatus(t, e); got != tt.wantStatus {
+				t.Fatalf("status: got %s, want %s", got, tt.wantStatus)
+			}
+			if tt.status == "running" {
+				var n int
+				if err := st.QueryRow(`SELECT COUNT(*) FROM work_log WHERE task_id='TASK-R1' AND action='boot_recover_pause'`).Scan(&n); err != nil || n != 1 {
+					t.Fatalf("应有 1 条 boot_recover_pause 记录, n=%d err=%v", n, err)
+				}
+			}
+		})
+	}
+}

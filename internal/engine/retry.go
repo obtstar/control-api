@@ -71,3 +71,33 @@ func (e *Engine) maybeRetry(taskID string, now time.Time) {
 	log.Printf("[engine] %s", detail)
 	e.maybeRun(m)
 }
+
+// RecoverOnBoot 启动回收（FINDING-043）：serve 重启后 running 任务的执行
+// goroutine 已随进程终止（孤儿 pi 无法感知，直接重跑有双跑风险），
+// 按 18 章"暂停最高权限"自动暂停并留痕，人工确认后 resume 恢复。
+func (e *Engine) RecoverOnBoot() {
+	if e.TasksDir == "" {
+		return
+	}
+	entries, err := os.ReadDir(e.TasksDir)
+	if err != nil {
+		log.Printf("[engine] 启动回收读目录失败 %s: %v", e.TasksDir, err)
+		return
+	}
+	for _, ent := range entries {
+		if !ent.IsDir() {
+			continue
+		}
+		m, err := tasks.ParseFile(filepath.Join(e.TasksDir, ent.Name(), "task.md"))
+		if err != nil || m.Status != "running" {
+			continue
+		}
+		m.Status = "paused"
+		if err := e.commitAs(m, "boot_recover_pause", "agent",
+			"serve 重启回收：原执行已随进程终止，人工确认后 resume 恢复"); err != nil {
+			log.Printf("[engine] 启动回收 %s 失败: %v", ent.Name(), err)
+			continue
+		}
+		log.Printf("[engine] 启动回收：%s running→paused（等人工 resume）", ent.Name())
+	}
+}
