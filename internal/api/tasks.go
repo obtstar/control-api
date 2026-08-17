@@ -19,7 +19,7 @@ import (
 type createReq struct {
 	Title   string `json:"title"`
 	RepoKey string `json:"repo_key"`
-	Domain  string `json:"domain"` // 可选：领域 skill（frontend-dev/backend-java/…）
+	Domain  string `json:"domain"` // 可选：领域 skill（frontend-dev/backend-go/…）
 	Body    string `json:"body"`   // 需求正文（L1，人写）
 }
 
