@@ -83,7 +83,9 @@ func Serve(cfg *config.Config) error {
 	}
 
 	// 任务目录索引：启动全量同步 + fsnotify 增量
-	os.MkdirAll(cfg.Paths.TasksDir, 0o755)
+	if err := os.MkdirAll(cfg.Paths.TasksDir, 0o755); err != nil {
+		return fmt.Errorf("创建任务目录 %s: %w", cfg.Paths.TasksDir, err)
+	}
 	if err := watcher.Sync(cfg.Paths.TasksDir, st); err != nil {
 		log.Printf("[api] 初始同步: %v", err)
 	}

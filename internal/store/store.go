@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS sessions (             -- 会话 token
   token       TEXT PRIMARY KEY,
   username    TEXT NOT NULL,
   role        TEXT NOT NULL,
-  expires_at  DATETIME NOT NULL
+  expires_at  INTEGER NOT NULL                     -- Unix 秒（FINDING-020：原 DATETIME 声明与实存 int 不符；NUMERIC 亲和兼容存量数据）
 );
 `)
 	return err

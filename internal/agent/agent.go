@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,11 +47,13 @@ func (r *Runner) RunStage(m *tasks.Meta, stage, model string) (string, error) {
 
 	runErr := cmd.Run()
 
-	// 产物落盘：stage 报告（无论成败都留档）
+	// 产物落盘：stage 报告（无论成败都留档；落盘失败须可见，FINDING-020）
 	artifact := filepath.Join(m.Path, fmt.Sprintf("report-%s.md", stage))
 	content := fmt.Sprintf("# %s / %s\n\n```\n%s\n%s\n```\n",
 		m.TaskID, stage, stdout.String(), stderr.String())
-	os.WriteFile(artifact, []byte(content), 0o644)
+	if err := os.WriteFile(artifact, []byte(content), 0o644); err != nil {
+		log.Printf("[agent] 阶段报告落盘失败 %s: %v", artifact, err)
+	}
 
 	if ctx.Err() == context.DeadlineExceeded {
 		return artifact, fmt.Errorf("阶段 %s 执行超时（%v）", stage, timeout)

@@ -458,6 +458,10 @@ components:
           type: string
           format: date-time
           description: 最近更新时间
+        path:
+          type: string
+          readOnly: true
+          description: 任务目录绝对路径（看板索引派生字段，FINDING-039 补登记）
       required:
         - task_id
         - title
