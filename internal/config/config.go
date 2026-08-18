@@ -51,6 +51,9 @@ type PathsConfig struct {
 	// 搬仓时配置覆盖，不再硬编码 home 下固定相对路径）
 	ContractPath string `yaml:"contract_path"`
 	FindingsPath string `yaml:"findings_path"`
+	// RegistryPath 仓库注册表 repos.yaml（14.2：启动时读取，内存缓存；
+	// FINDING-019/046：任务创建校验 repo_key 已登记）
+	RegistryPath string `yaml:"registry_path"`
 }
 
 type Config struct {
@@ -118,6 +121,7 @@ func defaults() *Config {
 			WikiDir:      filepath.Join(h, "control-wiki"),
 			ContractPath: filepath.Join(h, "control-api", "docs", "api", "openapi.yaml"),
 			FindingsPath: filepath.Join(h, "control-center", "docs", "FINDINGS.md"),
+			RegistryPath: filepath.Join(h, "control-center", "registry", "repos.yaml"),
 		},
 	}
 }

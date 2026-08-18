@@ -229,7 +229,8 @@ func (e *Engine) Resume(m *tasks.Meta, by string) error {
 
 // MarkMerged 团队 MR 终审合并回传（merge webhook，FINDING-003）：
 // 仅 merge 阶段 awaiting_approval 可流转；状态置 merged（operator 记 webhook）
-// 后按现有 auto 机制推进 deliver（deliver 为 auto 阶段，maybeRun 拉起 agent 走完即 delivered）。
+// 并停留——merged 为稳定态（FINDING-029：已合并待交付，看板可感知），
+// 由人工 Deliver 确认后才推进 deliver。
 func (e *Engine) MarkMerged(taskID, detail string) error {
 	m := e.reload(taskID)
 	if m == nil {
@@ -242,14 +243,20 @@ func (e *Engine) MarkMerged(taskID, detail string) error {
 		return err
 	}
 	m.Status = "merged"
-	if err := e.commitAs(m, "merged", "webhook", detail); err != nil {
-		return err
+	return e.commitAs(m, "merged", "webhook", detail)
+}
+
+// Deliver 交付确认（FINDING-029）：仅 merge 阶段 merged 状态可触发（人工动作），
+// 推进进入 deliver 阶段（auto，maybeRun 拉起 agent 走完即 delivered）。
+func (e *Engine) Deliver(m *tasks.Meta, by string) error {
+	if m.Stage != "merge" || m.Status != "merged" {
+		return fmt.Errorf("任务不在已合并待交付态: stage=%s status=%s", m.Stage, m.Status)
 	}
 	next, err := e.P.Next(m.Stage)
 	if err != nil {
 		return err
 	}
-	return e.enterNextAs(m, next, "merged→"+next, "webhook", detail)
+	return e.enterNextAs(m, next, "deliver", by, "交付确认 by "+by)
 }
 
 // commit 自动路径落盘：agent 驱动的状态迁移，work_log operator 恒记 agent

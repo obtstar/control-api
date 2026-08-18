@@ -79,7 +79,8 @@ func TestAutoAdvanceAttribution(t *testing.T) {
 	assertOperators(t, st, m.TaskID, "agent")
 }
 
-// MarkMerged：merged 与 merged→deliver 条目 operator 均记 webhook
+// MarkMerged：merged 条目 operator 记 webhook（FINDING-029 起停留 merged，
+// 不再同请求推进 deliver；后续 deliver 条目归因见 TestDeliverAfterMerged）
 func TestMarkMergedAttribution(t *testing.T) {
 	eng, st, m := newMergeEngine(t, "merge", "awaiting_approval")
 	if err := st.NewApproval(m.TaskID, "merge", "team", "MR diff"); err != nil {

@@ -34,6 +34,12 @@ func (s *server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("title/body 必填"))
 		return
 	}
+	// repo_key 提供时须已登记注册表（FINDING-019/046：任务不得指向不存在的
+	// 仓库登记，14.2）；空 repo_key 允许——未分配仓库的草稿任务，后续补登
+	if req.RepoKey != "" && s.reg != nil && !s.reg.Registered(req.RepoKey) {
+		writeErr(w, 400, fmt.Errorf("repo_key 未登记注册表: %s（登记见 control-center/registry/repos.yaml，14.2）", req.RepoKey))
+		return
+	}
 	// 原子占号建目录（FINDING-009 竞态）：os.Mkdir 撞 EEXIST 才 +1 重试
 	id, dir, err := createTaskDir(s.cfg.Paths.TasksDir)
 	if err != nil {
@@ -67,7 +73,7 @@ func (s *server) createTask(w http.ResponseWriter, r *http.Request) {
 }
 
 type actionReq struct {
-	Action   string `json:"action"` // approve/reject/pause/resume（advance 仅供内部自动流程，不经 HTTP）
+	Action   string `json:"action"` // approve/reject/pause/resume/deliver（advance 仅供内部自动流程，不经 HTTP）
 	Comment  string `json:"comment"`
 	By       string `json:"by"`
 	Artifact string `json:"artifact"`
@@ -112,6 +118,8 @@ func (s *server) taskAction(w http.ResponseWriter, r *http.Request) {
 		err = s.eng.Pause(m, req.By)
 	case "resume":
 		err = s.eng.Resume(m, req.By)
+	case "deliver": // FINDING-029 交付确认：仅 merge/merged 可触发
+		err = s.eng.Deliver(m, req.By)
 	default:
 		writeErr(w, 400, fmt.Errorf("未知 action: %s", req.Action))
 		return

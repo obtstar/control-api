@@ -16,7 +16,8 @@ type mergeEventReq struct {
 	Detail string `json:"detail"` // 如 "MR !123 by @teammate"
 }
 
-// mergeEvent POST /api/webhooks/merge-event：Git 平台合并事件 → MarkMerged → deliver
+// mergeEvent POST /api/webhooks/merge-event：Git 平台合并事件 → MarkMerged
+// 置 merged 停留待交付（FINDING-029），人工 action=deliver 确认后才推进 deliver
 func (s *server) mergeEvent(w http.ResponseWriter, r *http.Request) {
 	secret := s.cfg.Server.WebhookSecret
 	if secret == "" {

@@ -17,6 +17,7 @@ import (
 	"control-api/internal/engine"
 	"control-api/internal/kb"
 	"control-api/internal/pipeline"
+	"control-api/internal/registry"
 	"control-api/internal/store"
 	"control-api/internal/watcher"
 )
@@ -26,6 +27,9 @@ type server struct {
 	st   *store.Store
 	eng  *engine.Engine
 	auth *authn.Auth
+	// reg 仓库注册表内存缓存（14.2 启动时读取；FINDING-019/046 createTask 校验
+	// repo_key）。Serve 启动必加载、失败即退出；单测夹具可置 nil（不启用校验）
+	reg *registry.Registry
 	// searcher KB 检索（web 检索视图）：kb.endpoint 非空即装配，不受 grounding mode 门控
 	searcher kb.Searcher
 }
@@ -66,7 +70,12 @@ func Serve(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	s := &server{cfg: cfg, st: st, eng: &engine.Engine{P: pl, St: st}}
+	// 注册表启动时读取（14.2，FINDING-019/046）：缺失/解析失败即启动失败，不降级放行
+	reg, err := registry.Load(cfg.Paths.RegistryPath)
+	if err != nil {
+		return err
+	}
+	s := &server{cfg: cfg, st: st, eng: &engine.Engine{P: pl, St: st}, reg: reg}
 	s.auth = &authn.Auth{St: st}
 	s.eng.SetTasksDir(cfg.Paths.TasksDir)
 	s.eng.Runner = &agent.Runner{Cfg: cfg.Agent}

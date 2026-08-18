@@ -1,5 +1,6 @@
 // merge 阶段终审链路测试（FINDING-003）：team_mr_review 闸、Web 审批守卫、
-// MarkMerged 流转与 deliver 自动推进。:memory: SQLite 实测，runner 用假实现不拉起 pi。
+// MarkMerged 停留 merged（FINDING-029：已合并待交付看板可见）与 deliver 人工确认推进。
+// :memory: SQLite 实测，runner 用假实现不拉起 pi。
 package engine
 
 import (
@@ -105,8 +106,8 @@ func TestWebApprovalRejectedOnMergeStage(t *testing.T) {
 }
 
 // MarkMerged 状态守卫：仅 merge 阶段 awaiting_approval 可流转；
-// 合法流转后按 auto 机制推进 deliver（Runner 为 nil 时停在 deliver/running），
-// work_log 留有 operator=webhook 的 merged 条目
+// 合法流转后停留 merge/merged（FINDING-029：已合并待交付，看板可感知，
+// 不再同请求内瞬态推进 deliver），work_log 留有 operator=webhook 的 merged 条目
 func TestMarkMergedTransitions(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -138,8 +139,8 @@ func TestMarkMergedTransitions(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := eng.reload(m.TaskID)
-			if got.Stage != "deliver" || got.Status != "running" {
-				t.Fatalf("merged 后应推进 deliver/running: stage=%s status=%s", got.Stage, got.Status)
+			if got.Stage != "merge" || got.Status != "merged" {
+				t.Fatalf("MarkMerged 后应停留 merge/merged: stage=%s status=%s", got.Stage, got.Status)
 			}
 			logs, err := st.ListLogs(10)
 			if err != nil {
@@ -166,8 +167,36 @@ func TestMarkMergedUnknownTask(t *testing.T) {
 	}
 }
 
-// merged → deliver（auto）由 fakeRunner 立即完成 → delivered
-func TestMarkMergedAutoDelivers(t *testing.T) {
+// Deliver 状态守卫（FINDING-029）：仅 merge 阶段 merged 状态可确认交付
+func TestDeliverGuard(t *testing.T) {
+	cases := []struct {
+		name   string
+		stage  string
+		status string
+	}{
+		{"merge 等待审批不可", "merge", "awaiting_approval"},
+		{"merge running 不可", "merge", "running"},
+		{"testing 阶段不可", "testing", "awaiting_approval"},
+		{"已交付不可重复", "deliver", "delivered"},
+		{"暂停中不可（暂停为最高运行时权限）", "merge", "paused"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			eng, _, m := newMergeEngine(t, c.stage, c.status)
+			if err := eng.Deliver(m, "alice"); err == nil {
+				t.Fatal("应报错")
+			}
+			got := eng.reload(m.TaskID)
+			if got.Stage != c.stage || got.Status != c.status {
+				t.Fatalf("状态被改动: stage=%s status=%s", got.Stage, got.Status)
+			}
+		})
+	}
+}
+
+// merged 停留后人工 Deliver 确认 → deliver（auto）由 fakeRunner 立即完成 → delivered；
+// work_log 依次留 merged(webhook)、deliver(alice) 两条归因条目
+func TestDeliverAfterMerged(t *testing.T) {
 	eng, st, m := newMergeEngine(t, "merge", "awaiting_approval")
 	if err := st.NewApproval(m.TaskID, "merge", "team", "MR diff"); err != nil {
 		t.Fatal(err)
@@ -176,15 +205,38 @@ func TestMarkMergedAutoDelivers(t *testing.T) {
 	if err := eng.MarkMerged(m.TaskID, "MR !123 by @teammate"); err != nil {
 		t.Fatal(err)
 	}
+	if got := eng.reload(m.TaskID); got.Stage != "merge" || got.Status != "merged" {
+		t.Fatalf("MarkMerged 后应停留 merge/merged: %+v", got)
+	}
+	m = eng.reload(m.TaskID) // MarkMerged 内部自 reload 推进，持最新状态再 Deliver（同 handler 先解析再调用的口径）
+	if err := eng.Deliver(m, "alice"); err != nil {
+		t.Fatal(err)
+	}
 	deadline := time.Now().Add(2 * time.Second) // maybeRun 异步执行，轮询等终态
 	for {
 		got := eng.reload(m.TaskID)
 		if got != nil && got.Stage == "deliver" && got.Status == "delivered" {
-			return
+			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("deliver 未自动完成: %+v", got)
+			t.Fatalf("deliver 未完成: %+v", got)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	logs, err := st.ListLogs(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mergedOp, deliverOp string
+	for _, l := range logs {
+		switch l.Action {
+		case "merged":
+			mergedOp = l.Operator
+		case "deliver":
+			deliverOp = l.Operator
+		}
+	}
+	if mergedOp != "webhook" || deliverOp != "alice" {
+		t.Fatalf("归因错误: merged=%q deliver=%q, want webhook/alice", mergedOp, deliverOp)
 	}
 }

@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"control-api/internal/config"
+	"control-api/internal/engine"
+	"control-api/internal/registry"
 	"control-api/internal/store"
 	"control-api/internal/tasks"
 )
@@ -27,6 +29,21 @@ func newCreateTestServer(t *testing.T) *server {
 	}
 	t.Cleanup(func() { st.Close() })
 	return &server{cfg: &config.Config{Paths: config.PathsConfig{TasksDir: filepath.Join(dir, "tasks")}}, st: st}
+}
+
+// testRegistry 夹具注册表：demo 已登记，retired 已禁用（FINDING-019/046）
+func testRegistry(t *testing.T) *registry.Registry {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "repos.yaml")
+	content := "repos:\n  - repo_key: demo\n  - repo_key: retired\n    disabled: true\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := registry.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
 
 func postCreate(t *testing.T, s *server, body, xUser string) (int, map[string]string) {
@@ -107,6 +124,39 @@ func TestCreateTaskYAMLInjectionTitle(t *testing.T) {
 	}
 }
 
+// repo_key 提供时须已登记注册表（FINDING-019/046：任务不得指向不存在的仓库登记）；
+// 空 repo_key 允许（未分配仓库的草稿任务）；未登记/disabled → 400 且不落 task.md
+func TestCreateTaskRepoKeyValidated(t *testing.T) {
+	s := newCreateTestServer(t)
+	s.reg = testRegistry(t)
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"已登记仓库可建", `{"title":"t","repo_key":"demo","body":"b"}`, 200},
+		{"空 repo_key 允许（草稿）", `{"title":"t","body":"b"}`, 200},
+		{"未登记仓库 400", `{"title":"t","repo_key":"billing-core","body":"b"}`, 400},
+		{"disabled 仓库 400", `{"title":"t","repo_key":"retired","body":"b"}`, 400},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			code, _ := postCreate(t, s, c.body, "")
+			if code != c.want {
+				t.Fatalf("status = %d, want %d", code, c.want)
+			}
+		})
+	}
+	// 400 的请求不得留下任务目录：4 例仅前 2 例落盘
+	entries, err := os.ReadDir(s.cfg.Paths.TasksDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("任务目录数 = %d, want 2（400 不应落 task.md）", len(entries))
+	}
+}
+
 // operator 记注入身份的真实用户（FINDING-034；FINDING-026 起经 context 传递）；缺省回落 human
 func TestCreateTaskOperatorFromXUser(t *testing.T) {
 	s := newCreateTestServer(t)
@@ -131,6 +181,63 @@ func TestCreateTaskOperatorFromXUser(t *testing.T) {
 	}
 	if got["TASK-002"] != "human" {
 		t.Errorf("TASK-002 operator = %q, want human（未注入身份回落）", got["TASK-002"])
+	}
+}
+
+// action=deliver（FINDING-029 交付确认）：仅 merge/merged 可触发 → 200 进 deliver/running
+// （Runner 为 nil 不拉起 agent，停在 deliver/running）；其余状态 409 且不改状态
+func TestTaskActionDeliver(t *testing.T) {
+	cases := []struct {
+		name   string
+		stage  string
+		status string
+		want   int
+	}{
+		{"merge/merged 可确认交付", "merge", "merged", 200},
+		{"merge 等待终审不可", "merge", "awaiting_approval", 409},
+		{"非 merge 阶段不可", "design", "awaiting_approval", 409},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			taskDir := filepath.Join(dir, "TASK-001")
+			if err := os.MkdirAll(taskDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			content := "---\ntask_id: TASK-001\ntitle: 测试任务\nstage: " + c.stage + "\nstatus: " + c.status + "\nauthority: L1\n---\n\n# 测试任务\n"
+			if err := os.WriteFile(filepath.Join(taskDir, "task.md"), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			st, err := store.Open(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			st.SetMaxOpenConns(1)
+			t.Cleanup(func() { st.Close() })
+			s := &server{
+				cfg: &config.Config{Paths: config.PathsConfig{TasksDir: dir}},
+				st:  st,
+				eng: &engine.Engine{P: mergeTestPipeline(), St: st, TasksDir: dir},
+			}
+			r := httptest.NewRequest(http.MethodPost, "/api/tasks/TASK-001/action",
+				strings.NewReader(`{"action":"deliver","by":"alice"}`))
+			r.SetPathValue("id", "TASK-001")
+			w := httptest.NewRecorder()
+			s.taskAction(w, r)
+			if w.Code != c.want {
+				t.Fatalf("status = %d, want %d, body=%s", w.Code, c.want, w.Body.String())
+			}
+			if w.Code == 200 {
+				contractSpec(t).validateJSON(t, http.MethodPost, "/api/tasks/{id}/action", 200, w.Body.Bytes())
+				m, err := tasks.ParseFile(filepath.Join(taskDir, "task.md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if m.Stage != "deliver" || m.Status != "running" {
+					t.Fatalf("应进入 deliver/running: stage=%s status=%s", m.Stage, m.Status)
+				}
+			}
+		})
 	}
 }
 
