@@ -161,8 +161,7 @@ type finding struct {
 
 // listFindings GET /api/findings：每次请求实时解析 FINDINGS.md 权威表（文件极小，不做缓存）
 func (s *server) listFindings(w http.ResponseWriter, r *http.Request) {
-	path := filepath.Join(s.cfg.Paths.Home, "control-center", "docs", "FINDINGS.md")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(s.cfg.Paths.FindingsPath)
 	if err != nil {
 		writeErr(w, 500, fmt.Errorf("读取 FINDINGS.md: %w", err))
 		return
@@ -170,7 +169,8 @@ func (s *server) listFindings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, parseFindings(data))
 }
 
-// parseFindings 解析 Markdown 表格数据行；表头/分隔行/非 FINDING 开头行/列数不足行跳过
+// parseFindings 解析 Markdown 表格数据行；表头/分隔行/非 FINDING 开头行/列数不足行跳过。
+// 单元格内 `\|` 转义不参与切分，还原为字面 |（FINDING-028）
 func parseFindings(data []byte) []finding {
 	findings := make([]finding, 0)
 	for _, line := range strings.Split(string(data), "\n") {
@@ -178,7 +178,7 @@ func parseFindings(data []byte) []finding {
 		if !strings.HasPrefix(line, "| FINDING-") {
 			continue
 		}
-		cells := strings.Split(line, "|")
+		cells := splitRow(line)
 		// 整行形如 "| c1 | c2 | ... | c8 |"：首尾为空串，8 列需至少 10 段
 		if len(cells) < 10 {
 			continue
@@ -191,6 +191,26 @@ func parseFindings(data []byte) []finding {
 		findings = append(findings, f)
 	}
 	return findings
+}
+
+// splitRow 按未转义的 | 切分表格行；`\|` 还原为字面 |
+func splitRow(line string) []string {
+	cells := []string{}
+	var cur strings.Builder
+	for i := 0; i < len(line); i++ {
+		if line[i] == '\\' && i+1 < len(line) && line[i+1] == '|' {
+			cur.WriteByte('|')
+			i++
+			continue
+		}
+		if line[i] == '|' {
+			cells = append(cells, cur.String())
+			cur.Reset()
+			continue
+		}
+		cur.WriteByte(line[i])
+	}
+	return append(cells, cur.String())
 }
 
 // ── KB 检索端点 ─────────────────────────────────────────────
@@ -229,7 +249,7 @@ func (s *server) searchKB(w http.ResponseWriter, r *http.Request) {
 
 // serveOpenAPI GET /api/openapi.yaml：自指端点，服务契约文件本体（文档即实现）
 func (s *server) serveOpenAPI(w http.ResponseWriter, r *http.Request) {
-	path := filepath.Join(s.cfg.Paths.Home, "control-api", "docs", "api", "openapi.yaml")
+	path := s.cfg.Paths.ContractPath
 	data, err := os.ReadFile(path)
 	if err != nil {
 		writeErr(w, 500, fmt.Errorf("读取 openapi.yaml: %w", err))

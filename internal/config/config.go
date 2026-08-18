@@ -47,6 +47,10 @@ type PathsConfig struct {
 	WtRoot   string `yaml:"wt_root"`   // ~/wt
 	TasksDir string `yaml:"tasks_dir"` // tasks/（任务即文档）
 	WikiDir  string `yaml:"wiki_dir"`  // ~/control-wiki
+	// ContractPath/FindingsPath 契约与问题台账文件位置（FINDING-040：
+	// 搬仓时配置覆盖，不再硬编码 home 下固定相对路径）
+	ContractPath string `yaml:"contract_path"`
+	FindingsPath string `yaml:"findings_path"`
 }
 
 type Config struct {
@@ -107,11 +111,13 @@ func defaults() *Config {
 			TimeoutSec: 1800,
 		},
 		Paths: PathsConfig{
-			Home:     h,
-			GitDir:   filepath.Join(h, ".repos"),
-			WtRoot:   filepath.Join(h, "wt"),
-			TasksDir: filepath.Join(h, "control-center", "tasks"),
-			WikiDir:  filepath.Join(h, "control-wiki"),
+			Home:         h,
+			GitDir:       filepath.Join(h, ".repos"),
+			WtRoot:       filepath.Join(h, "wt"),
+			TasksDir:     filepath.Join(h, "control-center", "tasks"),
+			WikiDir:      filepath.Join(h, "control-wiki"),
+			ContractPath: filepath.Join(h, "control-api", "docs", "api", "openapi.yaml"),
+			FindingsPath: filepath.Join(h, "control-center", "docs", "FINDINGS.md"),
 		},
 	}
 }
@@ -163,12 +169,15 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// Save 0600 落盘。密钥只经 env 注入：序列化前强制清空 server.api_key 与
-// llm.api_key，防止 env 覆盖进内存的密钥被回写落盘（FINDING-010）。
+// Save 0600 落盘。密钥只经 env 注入：序列化前强制清空 server.api_key、
+// llm.api_key、kb.api_key、server.webhook_secret，防止 env 覆盖进内存的
+// 密钥被回写落盘（FINDING-010；kb/webhook 两项 FINDING-038 补齐）。
 func (c *Config) Save() error {
 	safe := *c
 	safe.Server.APIKey = ""
 	safe.LLM.APIKey = ""
+	safe.KB.APIKey = ""
+	safe.Server.WebhookSecret = ""
 	data, err := yaml.Marshal(&safe)
 	if err != nil {
 		return err

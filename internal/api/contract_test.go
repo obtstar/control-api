@@ -129,7 +129,7 @@ func TestContractPendingApprovalsResponse(t *testing.T) {
 	}
 	s := &server{st: st}
 	r := httptest.NewRequest(http.MethodGet, "/api/approvals/pending", nil)
-	r.Header.Set("X-Role", "designer")
+	r = withIdentity(r, "", "designer")
 	w := httptest.NewRecorder()
 	s.listPendingApprovals(w, r)
 	if w.Code != 200 {
@@ -173,7 +173,7 @@ func TestContractTaskActionResponse(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/tasks/TASK-001/action",
 		strings.NewReader(`{"action":"pause"}`))
 	r.SetPathValue("id", "TASK-001")
-	r.Header.Set("X-User", "alice")
+	r = withIdentity(r, "alice", "")
 	w := httptest.NewRecorder()
 	s.taskAction(w, r)
 	if w.Code != 200 {

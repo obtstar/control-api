@@ -82,9 +82,28 @@ func TestParseFindingsFields(t *testing.T) {
 	}
 }
 
+// FINDING-028：单元格内 `\|` 转义不得参与切分（还原为字面 |），列对齐不变
+func TestParseFindingsEscapedPipe(t *testing.T) {
+	row := "| FINDING-028 | 2026-08-09 | 问题一览 | 含 `\\|` 转义的单元格 | findings.go | 解析错位 | open | |\n"
+	got := parseFindings([]byte(row))
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	f := got[0]
+	if f.Phenomenon != "含 `|` 转义的单元格" {
+		t.Errorf("Phenomenon 转义还原错误: %q", f.Phenomenon)
+	}
+	if f.Evidence != "findings.go" || f.Impact != "解析错位" || f.Status != "open" {
+		t.Errorf("列错位: %+v", f)
+	}
+}
+
 func TestListFindings(t *testing.T) {
 	newServer := func(home string) *server {
-		return &server{cfg: &config.Config{Paths: config.PathsConfig{Home: home}}}
+		return &server{cfg: &config.Config{Paths: config.PathsConfig{
+			Home:         home,
+			FindingsPath: filepath.Join(home, "control-center", "docs", "FINDINGS.md"),
+		}}}
 	}
 
 	t.Run("文件缺失返回 500", func(t *testing.T) {
@@ -227,10 +246,12 @@ func TestWebhookBypassesBearerAuth(t *testing.T) {
 
 // ── openapi.yaml 自指端点 ───────────────────────────────────
 
-// GET /api/openapi.yaml：200 返回契约本体（home 指向多仓根，即测试工作目录上三级）
+// GET /api/openapi.yaml：200 返回契约本体（ContractPath 直指仓内契约文件，上两级即仓根）
 func TestServeOpenAPI(t *testing.T) {
 	t.Run("200 返回契约文件原文", func(t *testing.T) {
-		s := &server{cfg: &config.Config{Paths: config.PathsConfig{Home: "../../.."}}}
+		s := &server{cfg: &config.Config{Paths: config.PathsConfig{
+			ContractPath: "../../docs/api/openapi.yaml",
+		}}}
 		w := httptest.NewRecorder()
 		s.serveOpenAPI(w, httptest.NewRequest(http.MethodGet, "/api/openapi.yaml", nil))
 		if w.Code != 200 {
@@ -245,7 +266,9 @@ func TestServeOpenAPI(t *testing.T) {
 	})
 
 	t.Run("契约文件缺失返回 500", func(t *testing.T) {
-		s := &server{cfg: &config.Config{Paths: config.PathsConfig{Home: t.TempDir()}}}
+		s := &server{cfg: &config.Config{Paths: config.PathsConfig{
+			ContractPath: filepath.Join(t.TempDir(), "none.yaml"),
+		}}}
 		w := httptest.NewRecorder()
 		s.serveOpenAPI(w, httptest.NewRequest(http.MethodGet, "/api/openapi.yaml", nil))
 		if w.Code != 500 {

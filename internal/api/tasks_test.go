@@ -33,7 +33,7 @@ func postCreate(t *testing.T, s *server, body, xUser string) (int, map[string]st
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, "/api/tasks", strings.NewReader(body))
 	if xUser != "" {
-		r.Header.Set("X-User", xUser)
+		r = withIdentity(r, xUser, "")
 	}
 	w := httptest.NewRecorder()
 	s.createTask(w, r)
@@ -107,7 +107,7 @@ func TestCreateTaskYAMLInjectionTitle(t *testing.T) {
 	}
 }
 
-// operator 记 X-User 真实用户（FINDING-034）；缺省回落 human
+// operator 记注入身份的真实用户（FINDING-034；FINDING-026 起经 context 传递）；缺省回落 human
 func TestCreateTaskOperatorFromXUser(t *testing.T) {
 	s := newCreateTestServer(t)
 	if code, _ := postCreate(t, s, `{"title":"t1","body":"b"}`, "alice"); code != 200 {
@@ -130,7 +130,7 @@ func TestCreateTaskOperatorFromXUser(t *testing.T) {
 		t.Errorf("TASK-001 operator = %q, want alice", got["TASK-001"])
 	}
 	if got["TASK-002"] != "human" {
-		t.Errorf("TASK-002 operator = %q, want human（无 X-User 回落）", got["TASK-002"])
+		t.Errorf("TASK-002 operator = %q, want human（未注入身份回落）", got["TASK-002"])
 	}
 }
 

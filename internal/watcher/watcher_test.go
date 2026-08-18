@@ -180,6 +180,29 @@ func TestWatchDebounce(t *testing.T) {
 	}
 }
 
+// FINDING-037：防抖须有上限——持续高频事件不得无限推迟 sync
+func TestWatchDebounceCap(t *testing.T) {
+	dir := t.TempDir()
+	st := newTestStore(t)
+	var syncs atomic.Int32
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+	// 测试注入小参数：debounce 50ms，上限 300ms（生产 500ms/5s）
+	if err := watchD(dir, st, done, func() { syncs.Add(1) }, 50*time.Millisecond, 300*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	// 持续 40ms 一次的高频写入（远超防抖窗口）：无上限时 sync 会被无限推迟
+	stop := time.Now().Add(700 * time.Millisecond)
+	for time.Now().Before(stop) {
+		writeTask(t, dir, "TASK-004", "running")
+		time.Sleep(40 * time.Millisecond)
+	}
+	// 写入期（700ms）已超过上限（300ms）：退出循环时 capped sync 应已发生
+	if n := syncs.Load(); n < 1 {
+		t.Fatalf("持续高频事件下 sync 被无限推迟（FINDING-037），syncs=%d", n)
+	}
+}
+
 // Sync 全量逻辑回归（表驱动）
 func TestSync(t *testing.T) {
 	t.Run("目录不存在返回 nil", func(t *testing.T) {

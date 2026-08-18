@@ -55,7 +55,7 @@ func (s *server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	operator := r.Header.Get("X-User") // FINDING-034：记真实操作人（同 taskAction 取法）
+	operator, _ := identity(r) // FINDING-034：记真实操作人（FINDING-026：经 context 传递）
 	if operator == "" {
 		operator = "human"
 	}
@@ -81,7 +81,7 @@ func (s *server) taskAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.By == "" {
-		req.By = r.Header.Get("X-User")
+		req.By, _ = identity(r)
 		if req.By == "" {
 			req.By = "human"
 		}
@@ -90,7 +90,8 @@ func (s *server) taskAction(w http.ResponseWriter, r *http.Request) {
 	if req.Action == "approve" || req.Action == "reject" {
 		role, err := s.st.ApprovalRoleOf(id)
 		if err == nil && role != "" {
-			u := &authn.User{Username: r.Header.Get("X-User"), Role: r.Header.Get("X-Role")}
+			uname, urole := identity(r)
+			u := &authn.User{Username: uname, Role: urole}
 			if !authn.CanDecide(u, role) {
 				writeErr(w, 403, fmt.Errorf("该阶段审批权属于角色 %s", role))
 				return
@@ -123,7 +124,7 @@ func (s *server) taskAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listPendingApprovals(w http.ResponseWriter, r *http.Request) {
-	role := r.Header.Get("X-Role")
+	_, role := identity(r)
 	rows, err := s.st.ListPendingApprovals(role)
 	if err != nil {
 		writeErr(w, 500, err)

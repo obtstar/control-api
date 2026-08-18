@@ -96,3 +96,33 @@ func TestSaveStripsAPIKeys(t *testing.T) {
 		t.Errorf("LLM.Endpoint = %q, want %q", back.LLM.Endpoint, cfg.LLM.Endpoint)
 	}
 }
+
+// FINDING-038：kb.api_key 与 server.webhook_secret 同类落盘风险，Save 一并强制写空
+func TestSaveStripsAllSecrets(t *testing.T) {
+	dir := t.TempDir()
+	cfg := defaults()
+	cfg.Path = filepath.Join(dir, "control-api.yaml")
+	cfg.KB.APIKey = "kb-secret"
+	cfg.Server.WebhookSecret = "hook-secret"
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(cfg.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "kb-secret") || strings.Contains(string(data), "hook-secret") {
+		t.Fatalf("密钥落盘:\n%s", data)
+	}
+}
+
+// FINDING-040：契约/FINDINGS 路径入配置（默认维持 home 相对布局，搬仓可配置覆盖）
+func TestDefaultsContractPaths(t *testing.T) {
+	cfg := defaults()
+	if !strings.HasSuffix(cfg.Paths.ContractPath, "control-api/docs/api/openapi.yaml") {
+		t.Errorf("Paths.ContractPath = %q", cfg.Paths.ContractPath)
+	}
+	if !strings.HasSuffix(cfg.Paths.FindingsPath, "control-center/docs/FINDINGS.md") {
+		t.Errorf("Paths.FindingsPath = %q", cfg.Paths.FindingsPath)
+	}
+}

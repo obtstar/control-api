@@ -14,7 +14,12 @@ import (
 	"control-api/internal/tasks"
 )
 
-const debounce = 500 * time.Millisecond
+const (
+	debounce = 500 * time.Millisecond
+	// maxWait 防抖上限：持续高频事件最迟按此周期同步一次，
+	// 不被事件流无限推迟（FINDING-037）
+	maxWait = 5 * time.Second
+)
 
 // Sync 全量同步一次（索引为派生物，全量重建最简单可靠）
 func Sync(dir string, st *store.Store) error {
@@ -42,6 +47,12 @@ func Watch(dir string, st *store.Store, done <-chan struct{}) error {
 // fsnotify 非递归（FINDING-006）：启动时把 tasks/ 下已有子目录一并纳入，
 // 事件循环中对新建目录动态 Add、对删除/改名目录清理监听。
 func watch(dir string, st *store.Store, done <-chan struct{}, onSync func()) error {
+	return watchD(dir, st, done, onSync, debounce, maxWait)
+}
+
+// watchD 同 watch，防抖窗口与上限可注入（测试用小参数）
+func watchD(dir string, st *store.Store, done <-chan struct{}, onSync func(),
+	d, mw time.Duration) error {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("new watcher: %w", err)
@@ -75,15 +86,25 @@ func watch(dir string, st *store.Store, done <-chan struct{}, onSync func()) err
 			return err
 		}
 	}
-	go loop(w, dir, st, done, watched, add, onSync)
+	go loop(w, dir, st, done, watched, add, onSync, d, mw)
 	return nil
 }
 
-// loop 事件循环：目录增删维护监听集合，任何事件重置防抖计时器
+// loop 事件循环：目录增删维护监听集合，任何事件重置防抖计时器；
+// capTimer 为防抖上限（FINDING-037），事件流持续时最迟 mw 同步一次
 func loop(w *fsnotify.Watcher, dir string, st *store.Store, done <-chan struct{},
-	watched map[string]bool, add func(string) error, onSync func()) {
+	watched map[string]bool, add func(string) error, onSync func(), d, mw time.Duration) {
 	defer w.Close()
-	var timer <-chan time.Time
+	var timer, capTimer <-chan time.Time
+	sync := func() {
+		if err := Sync(dir, st); err != nil {
+			log.Printf("[watcher] sync: %v", err)
+		}
+		if onSync != nil {
+			onSync()
+		}
+		timer, capTimer = nil, nil
+	}
 	for {
 		select {
 		case <-done:
@@ -93,19 +114,18 @@ func loop(w *fsnotify.Watcher, dir string, st *store.Store, done <-chan struct{}
 				return
 			}
 			handleEvent(w, ev, watched, add)
-			timer = time.After(debounce)
+			timer = time.After(d)
+			if capTimer == nil {
+				capTimer = time.After(mw)
+			}
 		case err, ok := <-w.Errors:
 			if ok {
 				log.Printf("[watcher] %v", err)
 			}
 		case <-timer:
-			if err := Sync(dir, st); err != nil {
-				log.Printf("[watcher] sync: %v", err)
-			}
-			if onSync != nil {
-				onSync()
-			}
-			timer = nil
+			sync()
+		case <-capTimer:
+			sync()
 		}
 	}
 }

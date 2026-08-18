@@ -2,10 +2,33 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 )
+
+// 身份经 context 传递（FINDING-026）：不放进可变请求头，绕过 withAuth 的
+// 路由拿到空身份而非伪造头。withIdentity 为 withAuth 与测试共用注入入口
+type ctxKey string
+
+const (
+	ctxUser ctxKey = "user"
+	ctxRole ctxKey = "role"
+)
+
+func withIdentity(r *http.Request, username, role string) *http.Request {
+	ctx := context.WithValue(r.Context(), ctxUser, username)
+	ctx = context.WithValue(ctx, ctxRole, role)
+	return r.WithContext(ctx)
+}
+
+// identity 读取请求身份；未注入（未经 withAuth）返回空串
+func identity(r *http.Request) (username, role string) {
+	username, _ = r.Context().Value(ctxUser).(string)
+	role, _ = r.Context().Value(ctxRole).(string)
+	return
+}
 
 type loginReq struct {
 	Username string `json:"username"`
@@ -45,9 +68,7 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			writeErr(w, 401, err)
 			return
 		}
-		r.Header.Set("X-User", u.Username)
-		r.Header.Set("X-Role", u.Role)
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, withIdentity(r, u.Username, u.Role))
 	})
 }
 

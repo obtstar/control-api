@@ -23,22 +23,33 @@ type Meta struct {
 	Path      string `yaml:"-"`         // 目录路径（非 frontmatter 字段）
 }
 
+// splitFrontmatter 切分 frontmatter（lines[0] 与闭合行）与正文。
+// 行级精确匹配 "---"：取代子串探测，"----"/"\n---x" 等前缀碰撞不再错位（FINDING-038）
+func splitFrontmatter(s string) (fm, rest string, err error) {
+	lines := strings.Split(s, "\n")
+	if lines[0] != "---" {
+		return "", "", fmt.Errorf("缺少 frontmatter")
+	}
+	for i := 1; i < len(lines); i++ {
+		if lines[i] == "---" {
+			return strings.Join(lines[1:i], "\n"), strings.Join(lines[i:], "\n"), nil
+		}
+	}
+	return "", "", fmt.Errorf("frontmatter 未闭合")
+}
+
 // ParseFile 读取 task.md 的 YAML frontmatter（--- 之间）
 func ParseFile(path string) (*Meta, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	s := string(data)
-	if !strings.HasPrefix(s, "---") {
-		return nil, fmt.Errorf("%s: 缺少 frontmatter", path)
-	}
-	end := strings.Index(s[3:], "\n---")
-	if end < 0 {
-		return nil, fmt.Errorf("%s: frontmatter 未闭合", path)
+	fm, _, err := splitFrontmatter(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	var m Meta
-	if err := yaml.Unmarshal([]byte(s[3:3+end]), &m); err != nil {
+	if err := yaml.Unmarshal([]byte(fm), &m); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	m.Path = filepath.Dir(path)
@@ -61,16 +72,15 @@ func WriteMeta(m *Meta) error {
 	if err != nil {
 		return err
 	}
-	s := string(data)
-	end := strings.Index(s[3:], "\n---")
-	if !strings.HasPrefix(s, "---") || end < 0 {
-		return fmt.Errorf("%s: frontmatter 异常", path)
+	_, rest, err := splitFrontmatter(string(data))
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
 	}
 	fm, err := yaml.Marshal(m)
 	if err != nil {
 		return err
 	}
-	out := "---\n" + string(fm) + s[3+end:]
+	out := "---\n" + string(fm) + rest
 	return os.WriteFile(path, []byte(out), 0o644)
 }
 
