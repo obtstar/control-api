@@ -33,6 +33,13 @@ type RegistryFields struct {
 	Allowed  []string `yaml:"allowed"`
 }
 
+// MirrorPair KB 镜像对照（mirror_pairs 型检查，FINDING-051）：
+// upstream/mirror 均相对 home；mirror 首行须携 kb-mirror 出处头（sha256=上游内容哈希）
+type MirrorPair struct {
+	Upstream string `yaml:"upstream"`
+	Mirror   string `yaml:"mirror"`
+}
+
 // Check 单项对账声明：doc_* 为文档侧（相对 control-center 根），fact_* 为事实侧（相对 home）
 type Check struct {
 	ID             string          `yaml:"id"`
@@ -45,6 +52,7 @@ type Check struct {
 	FactMustNot    []string        `yaml:"fact_must_not"`
 	FactJSONDeps   []string        `yaml:"fact_json_deps"`
 	RegistryFields *RegistryFields `yaml:"registry_fields"`
+	MirrorPairs    []MirrorPair    `yaml:"mirror_pairs"`
 }
 
 // Checks checks.yaml 顶层结构

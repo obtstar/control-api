@@ -1,6 +1,8 @@
 package reconcile
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -48,6 +50,9 @@ func runOne(home string, ch Check) []Result {
 	}
 	if ch.RegistryFields != nil {
 		checkRegistry(mk, home, ch)
+	}
+	if len(ch.MirrorPairs) > 0 {
+		checkMirrorFresh(mk, home, ch)
 	}
 	return out
 }
@@ -140,6 +145,39 @@ func checkRegistry(mk emit, home string, ch Check) {
 			if _, ok := repo[req]; !ok {
 				mk(Conflict, "注册表条目 %s 缺必需字段 %q", name, req)
 			}
+		}
+	}
+}
+
+// checkMirrorFresh KB 镜像新鲜度（FINDING-051）：逐对校验 mirror 首行携带的
+// kb-mirror 出处头（sha256=上游内容哈希）。镜像缺失/无出处头/哈希不符均 WARN——
+// 镜像是可再生成的派生物，过期不构成矛盾，重跑 control-center/scripts/kb-sync.sh 修复
+func checkMirrorFresh(mk emit, home string, ch Check) {
+	for _, p := range ch.MirrorPairs {
+		up, err := os.ReadFile(filepath.Join(home, p.Upstream))
+		if err != nil {
+			mk(Warn, "镜像上游缺失: %s（上游为权威，须先存在）", p.Upstream)
+			continue
+		}
+		mb, err := os.ReadFile(filepath.Join(home, p.Mirror))
+		if err != nil {
+			mk(Warn, "镜像缺失: %s（重跑 kb-sync.sh 生成）", p.Mirror)
+			continue
+		}
+		first, _, _ := strings.Cut(string(mb), "\n")
+		var recorded string
+		for _, tok := range strings.Fields(first) {
+			if v, ok := strings.CutPrefix(tok, "sha256="); ok {
+				recorded = strings.TrimRight(v, "-*>")
+			}
+		}
+		if recorded == "" || !strings.Contains(first, "kb-mirror:") {
+			mk(Warn, "镜像缺 kb-mirror 出处头: %s（非 kb-sync 产物或头损坏）", p.Mirror)
+			continue
+		}
+		sum := sha256.Sum256(up)
+		if recorded != hex.EncodeToString(sum[:]) {
+			mk(Warn, "镜像过期: %s（上游 %s 已变更，重跑 kb-sync.sh）", p.Mirror, p.Upstream)
 		}
 	}
 }

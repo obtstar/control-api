@@ -1,6 +1,8 @@
 package reconcile
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,5 +156,41 @@ func TestHasConflict(t *testing.T) {
 	}
 	if !HasConflict([]Result{{Severity: Conflict}}) {
 		t.Fatal("CONFLICT 应检出")
+	}
+}
+
+// KB 镜像新鲜度对账（FINDING-051）：镜像首行须携 kb-mirror 出处头且
+// sha256 与上游内容一致；缺失/无头/过期均 WARN（派生物可再生成，故不 CONFLICT）
+func TestRunMirrorFresh(t *testing.T) {
+	sum := func(s string) string {
+		h := sha256.Sum256([]byte(s))
+		return hex.EncodeToString(h[:])
+	}
+	ptr := func(s string) *string { return &s }
+	cases := []struct {
+		name     string
+		upstream string
+		mirror   *string // nil = 镜像文件不存在
+		wantSev  Severity
+	}{
+		{"新鲜一致", "正文", ptr("<!-- kb-mirror: upstream=up.md sha256=" + sum("正文") + " -->\nsynced-at: x -->\n\n正文"), Pass},
+		{"镜像过期", "新正文", ptr("<!-- kb-mirror: upstream=up.md sha256=" + sum("旧正文") + " -->\n旧正文"), Warn},
+		{"镜像缺失", "正文", nil, Warn},
+		{"缺出处头", "正文", ptr("正文"), Warn},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			writeFile(t, filepath.Join(home, "up.md"), tc.upstream)
+			if tc.mirror != nil {
+				writeFile(t, filepath.Join(home, "mirror.md"), *tc.mirror)
+			}
+			ch := &Checks{Checks: []Check{{ID: "kb-mirror", Desc: "镜像新鲜",
+				MirrorPairs: []MirrorPair{{Upstream: "up.md", Mirror: "mirror.md"}}}}}
+			res := Run(home, ch)
+			if len(res) != 1 || res[0].Severity != tc.wantSev {
+				t.Fatalf("应单条 %s: %+v", tc.wantSev, res)
+			}
+		})
 	}
 }
