@@ -1,9 +1,8 @@
-// engine 状态机测试：连败熔断（FINDING-002）、Reject 状态校验（FINDING-011）、
+// engine 状态机测试：Reject 状态校验（FINDING-011）、
 // 非法流转覆盖（FINDING-012）。:memory: SQLite 实测，不 mock。
 package engine
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,68 +45,6 @@ func newTestEngine(t *testing.T) (*Engine, *store.Store, *tasks.Meta) {
 		t.Fatal(err)
 	}
 	return eng, st, m
-}
-
-// 连败熔断：第 1、2 次失败置回 pending 可重试，第 3 次（默认阈值）自动暂停
-func TestConsecutiveFailuresTripAtThreshold(t *testing.T) {
-	cases := []struct {
-		failures   int
-		wantStatus string
-	}{
-		{1, "pending"},
-		{2, "pending"},
-		{3, "paused"},
-	}
-	for _, c := range cases {
-		t.Run(fmt.Sprintf("第%d次失败", c.failures), func(t *testing.T) {
-			eng, st, m := newTestEngine(t)
-			for i := 0; i < c.failures; i++ {
-				eng.handleRunFailure(m, "coding", fmt.Errorf("boom %d", i+1))
-			}
-			got := eng.reload(m.TaskID)
-			if got == nil {
-				t.Fatal("reload 失败")
-			}
-			if got.Status != c.wantStatus {
-				t.Fatalf("status = %s, want %s", got.Status, c.wantStatus)
-			}
-			if got.Stage != "coding" {
-				t.Fatalf("失败不应推进阶段: stage = %s", got.Stage)
-			}
-			if c.wantStatus == "paused" {
-				return // 暂停后 auto_pause 日志打断连败前缀，计数无意义
-			}
-			n, err := st.ConsecutiveFailures(m.TaskID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if n != c.failures {
-				t.Fatalf("连败计数 = %d, want %d", n, c.failures)
-			}
-		})
-	}
-}
-
-// 中间一次成功后连败计数清零，再次失败从 1 重新计
-func TestSuccessResetsFailureStreak(t *testing.T) {
-	eng, st, m := newTestEngine(t)
-	eng.handleRunFailure(m, "coding", fmt.Errorf("boom 1"))
-	eng.handleRunFailure(m, "coding", fmt.Errorf("boom 2"))
-	// 成功路径：成功日志（非失败 action）打断连续计数
-	if err := st.Log(m.TaskID, m.Stage, "auto_advance", "agent", "", "ok"); err != nil {
-		t.Fatal(err)
-	}
-	eng.handleRunFailure(m, "coding", fmt.Errorf("boom 3"))
-	n, err := st.ConsecutiveFailures(m.TaskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatalf("连败计数 = %d, want 1", n)
-	}
-	if got := eng.reload(m.TaskID); got.Status != "pending" {
-		t.Fatalf("计数清零后单次失败不应暂停: status = %s", got.Status)
-	}
 }
 
 // 非法状态流转全部报错（Approve/Reject/Resume/Pause）

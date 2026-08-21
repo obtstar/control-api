@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,15 +25,9 @@ type DBConfig struct {
 	Path string `yaml:"path"` // SQLite 文件（默认 ~/data/control.db）
 }
 
-type LLMConfig struct {
-	Endpoint string `yaml:"endpoint"` // LiteLLM 网关
-	// APIKey 运行时无消费方，仅占位/env 覆盖入口（LITELLM_API_KEY）；
-	// 密钥只经 env 注入，Save 强制写空不落盘（FINDING-010）
-	APIKey string `yaml:"api_key"`
-}
-
 // KBConfig KB grounding（18.3 依据检索，FINDING-016）。
 // Mode 默认 off：当前 KB 为空（FINDING-017），enforce 会暂停所有任务，故保守默认。
+// C1 执行层迁移（TASK-004）后 grounded 检查点位于 engine.Advance 入口。
 type KBConfig struct {
 	Endpoint string `yaml:"endpoint"` // PieKBS REST（默认 http://127.0.0.1:8766）
 	APIKey   string `yaml:"api_key"`  // env CONTROL_KB_API_KEY 优先
@@ -60,35 +53,8 @@ type Config struct {
 	Path   string       `yaml:"-"`
 	Server ServerConfig `yaml:"server"`
 	DB     DBConfig     `yaml:"db"`
-	LLM    LLMConfig    `yaml:"llm"`
 	Paths  PathsConfig  `yaml:"paths"`
-	Agent  AgentConfig  `yaml:"agent"`
 	KB     KBConfig     `yaml:"kb"`
-}
-
-type AgentConfig struct {
-	// Bin pi 可执行文件名（默认 pi，PATH 查找）
-	Bin string `yaml:"bin"`
-	// Models 流水线模型别名 → pi 模型模式（provider/id 或模糊模式）
-	// 别名见 pipeline.yaml 各阶段 model 字段：cheap/coding/heavy
-	Models map[string]string `yaml:"models"`
-	// SkillsDir 编排 skill 根目录（orchestration/skills），为空则不加载 skill
-	SkillsDir string `yaml:"skills_dir"`
-	// ScriptsDir 平台脚本目录（control-center/scripts，branch.sh 等），注入 pi 的 PATH
-	ScriptsDir string `yaml:"scripts_dir"`
-	// Command 可选：测试用命令模板覆盖（fake-pi），占位符：
-	// {{.Prompt}} {{.TaskID}} {{.Stage}} {{.Model}} {{.WorkDir}}
-	// 设置后忽略 Bin/Models/SkillsDir，直接按模板执行
-	Command    string `yaml:"command"`
-	TimeoutSec int    `yaml:"timeout_sec"`
-}
-
-// ResolveModel 模型别名 → pi 模型模式；未注册别名原样透传
-func (a AgentConfig) ResolveModel(alias string) string {
-	if m, ok := a.Models[alias]; ok {
-		return m
-	}
-	return alias
 }
 
 func home() string {
@@ -104,15 +70,7 @@ func defaults() *Config {
 	return &Config{
 		Server: ServerConfig{Host: "127.0.0.1", Port: 8765},
 		DB:     DBConfig{Path: filepath.Join(h, "data", "control.db")},
-		LLM:    LLMConfig{Endpoint: "http://litellm.internal:4000"},
 		KB:     KBConfig{Endpoint: "http://127.0.0.1:8766", Mode: "off"},
-		Agent: AgentConfig{
-			Bin:        "pi",
-			Models:     map[string]string{"cheap": "kimi-for-coding-highspeed", "coding": "kimi-for-coding", "heavy": "k3"},
-			SkillsDir:  filepath.Join(h, "control-center", "orchestration", "skills"),
-			ScriptsDir: filepath.Join(h, "control-center", "scripts"),
-			TimeoutSec: 1800,
-		},
 		Paths: PathsConfig{
 			Home:         h,
 			GitDir:       filepath.Join(h, ".repos"),
@@ -161,12 +119,6 @@ func Load() (*Config, error) {
 	if v := os.Getenv("CONTROL_WEBHOOK_SECRET"); v != "" {
 		cfg.Server.WebhookSecret = v
 	}
-	if v := os.Getenv("LITELLM_ENDPOINT"); v != "" {
-		cfg.LLM.Endpoint = strings.TrimRight(v, "/")
-	}
-	if v := os.Getenv("LITELLM_API_KEY"); v != "" {
-		cfg.LLM.APIKey = v
-	}
 	if v := os.Getenv("CONTROL_KB_API_KEY"); v != "" {
 		cfg.KB.APIKey = v
 	}
@@ -174,12 +126,11 @@ func Load() (*Config, error) {
 }
 
 // Save 0600 落盘。密钥只经 env 注入：序列化前强制清空 server.api_key、
-// llm.api_key、kb.api_key、server.webhook_secret，防止 env 覆盖进内存的
+// kb.api_key、server.webhook_secret，防止 env 覆盖进内存的
 // 密钥被回写落盘（FINDING-010；kb/webhook 两项 FINDING-038 补齐）。
 func (c *Config) Save() error {
 	safe := *c
 	safe.Server.APIKey = ""
-	safe.LLM.APIKey = ""
 	safe.KB.APIKey = ""
 	safe.Server.WebhookSecret = ""
 	data, err := yaml.Marshal(&safe)

@@ -6,12 +6,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"control-api/internal/kb"
-	"control-api/internal/tasks"
 )
 
 // fakeSearcher 记录调用参数的可控 Searcher
@@ -113,55 +110,68 @@ func TestGroundedNilSearcher(t *testing.T) {
 	}
 }
 
-// maybeRun 集成：enforce 无据在 agent 拉起前暂停（Runner 零调用）；
-// off 时 Searcher 零调用且 Runner 正常拉起
-func TestMaybeRunGrounding(t *testing.T) {
-	t.Run("enforce 无据不拉起 agent", func(t *testing.T) {
-		eng, _, m := newTestEngine(t)
-		eng.Searcher = &fakeSearcher{} // 空结果
-		eng.KBMode = "enforce"
-		var ran atomic.Int32
-		eng.Runner = runnerFunc(func(*tasks.Meta, string, string) (string, error) {
-			ran.Add(1)
-			return "x", nil
-		})
-		eng.maybeRun(m)
-		time.Sleep(20 * time.Millisecond) // 给（不应存在的）goroutine 留窗口
-		if ran.Load() != 0 {
-			t.Fatal("enforce 无据不应拉起 agent")
-		}
-		if got := eng.reload(m.TaskID); got.Status != "paused" {
-			t.Fatalf("status = %s, want paused", got.Status)
-		}
-	})
-
-	t.Run("off 零调用正常执行", func(t *testing.T) {
-		eng, _, m := newTestEngine(t)
-		fs := &fakeSearcher{}
-		eng.Searcher = fs
-		eng.KBMode = "off"
-		var ran atomic.Int32
-		eng.Runner = runnerFunc(func(*tasks.Meta, string, string) (string, error) {
-			ran.Add(1)
-			return "x", nil
-		})
-		eng.maybeRun(m)
-		deadline := time.Now().Add(2 * time.Second) // maybeRun 异步拉起，轮询确认
-		for ran.Load() == 0 && time.Now().Before(deadline) {
-			time.Sleep(10 * time.Millisecond)
-		}
-		if ran.Load() != 1 {
-			t.Fatal("off 模式 Runner 应正常拉起")
-		}
-		if fs.calls != 0 {
-			t.Fatalf("off 模式 Searcher 调用 %d 次, want 0", fs.calls)
-		}
-	})
+// Advance 入口 grounding 集成（TASK-004 迁移：检查点从执行前 maybeRun 迁至 Advance）：
+// Advance 入口 grounding（TASK-004 迁移：检查点从执行前 maybeRun 迁至 Advance）：
+// enforce 无据/不可达 → Advance 返回错误且任务自动暂停；warn → 正常推进且 work_log
+// 记 grounding；off → Searcher 零调用。
+func TestAdvanceGroundingEnforceNoBasis(t *testing.T) {
+	eng, _, m := newTestEngine(t)
+	eng.Searcher = &fakeSearcher{} // 空结果
+	eng.KBMode = "enforce"
+	if err := eng.Advance(m, "report.md"); err == nil {
+		t.Fatal("enforce 无据 Advance 应返回错误")
+	}
+	if got := eng.reload(m.TaskID); got.Status != "paused" {
+		t.Fatalf("status = %s, want paused", got.Status)
+	}
 }
 
-// runnerFunc 函数字面量适配 Runner 接口
-type runnerFunc func(m *tasks.Meta, stage, model string) (string, error)
+func TestAdvanceGroundingEnforceUnreachable(t *testing.T) {
+	eng, _, m := newTestEngine(t)
+	eng.Searcher = &fakeSearcher{err: fmt.Errorf("KB unreachable")}
+	eng.KBMode = "enforce"
+	if err := eng.Advance(m, "report.md"); err == nil {
+		t.Fatal("enforce 不可达 Advance 应返回错误")
+	}
+	if got := eng.reload(m.TaskID); got.Status != "paused" {
+		t.Fatalf("status = %s, want paused", got.Status)
+	}
+}
 
-func (f runnerFunc) RunStage(m *tasks.Meta, stage, model string) (string, error) {
-	return f(m, stage, model)
+func TestAdvanceGroundingWarn(t *testing.T) {
+	eng, st, m := newTestEngine(t)
+	eng.Searcher = &fakeSearcher{} // 空结果
+	eng.KBMode = "warn"
+	if err := eng.Advance(m, "report.md"); err != nil {
+		t.Fatalf("warn 无据不应阻断: %v", err)
+	}
+	if got := eng.reload(m.TaskID); got.Status != "awaiting_approval" {
+		t.Fatalf("status = %s, want awaiting_approval", got.Status)
+	}
+	logs, err := st.ListLogs(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range logs {
+		if l.Action == "grounding" && strings.Contains(l.Detail, "NO_BASIS") {
+			return
+		}
+	}
+	t.Fatal("warn 无据应记 grounding work_log")
+}
+
+func TestAdvanceGroundingOff(t *testing.T) {
+	eng, _, m := newTestEngine(t)
+	fs := &fakeSearcher{}
+	eng.Searcher = fs
+	eng.KBMode = "off"
+	if err := eng.Advance(m, "report.md"); err != nil {
+		t.Fatal(err)
+	}
+	if fs.calls != 0 {
+		t.Fatalf("off 模式 Searcher 调用 %d 次, want 0", fs.calls)
+	}
+	if got := eng.reload(m.TaskID); got.Status != "awaiting_approval" {
+		t.Fatalf("status = %s, want awaiting_approval", got.Status)
+	}
 }

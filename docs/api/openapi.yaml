@@ -214,6 +214,65 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /webhooks/advance:
+    post:
+      summary: DSH 会话阶段完成回传
+      description: |
+        C1 执行层迁移：任务阶段由 DSH 会话执行（agent.enabled=false 时 control-api
+        不拉起 pi 执行器），阶段产物落任务目录后经本通道声明阶段完成，engine.Advance
+        置 Stage=First()（若空）、末阶段→delivered、需审批阶段→awaiting_approval 并入
+        审批队列、auto 阶段→直接进入下一阶段。
+        状态守卫：仅 pending/running 可 advance；paused（暂停最高优先级，禁一切写）、
+        awaiting_approval（重复推进）、delivered → 409。
+        认证独立于 Bearer 会话：请求头 X-Webhook-Token 与服务端 server.webhook_secret
+        （env CONTROL_WEBHOOK_SECRET 可覆盖）常量时间比较；secret 未配置时端点未启用，
+        一律 503（与 /webhooks/merge-event 同密钥同策略，FINDING-003）。
+      security:
+        - WebhookToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdvanceEventRequest'
+      responses:
+        '200':
+          description: 阶段完成已受理，任务进入审批闸（awaiting_approval）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdvanceEventResponse'
+        '400':
+          description: 请求格式错误或缺 task_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: X-Webhook-Token 缺失或与共享密钥不符
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 任务不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 任务状态不可 advance（仅 pending/running）或 engine 拒绝推进
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: webhook 未启用（server.webhook_secret 未配置）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /approvals/pending:
     get:
       summary: 当前用户可审批列表
@@ -674,6 +733,35 @@ components:
           description: 受理后状态（merged，停留待人工 action=deliver 确认，FINDING-029）
       required:
         - task_id
+        - status
+
+    AdvanceEventRequest:
+      type: object
+      properties:
+        task_id:
+          type: string
+          description: 任务 ID，如 TASK-003（必填）
+        artifact:
+          type: [string, "null"]
+          description: 阶段产物说明（可选），如 "report-design.md"，记入 work_log detail
+      required:
+        - task_id
+
+    AdvanceEventResponse:
+      type: object
+      properties:
+        task_id:
+          type: string
+          description: 任务 ID
+        stage:
+          type: string
+          description: 受理后阶段（advance 后所在阶段）
+        status:
+          type: string
+          description: 受理后状态（需审批阶段为 awaiting_approval；auto 阶段为下一阶段 running）
+      required:
+        - task_id
+        - stage
         - status
 
     KBHit:

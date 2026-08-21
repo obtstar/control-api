@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"control-api/internal/agent"
 	"control-api/internal/authn"
 	"control-api/internal/config"
 	"control-api/internal/engine"
@@ -55,6 +54,7 @@ func (s *server) routes() []route {
 		{"GET /api/kb/search", s.searchKB},
 		{"GET /api/openapi.yaml", s.serveOpenAPI},
 		{"POST /api/webhooks/merge-event", s.mergeEvent}, // 独立密钥认证，见 webhook.go
+		{"POST /api/webhooks/advance", s.advanceEvent},   // DSH 阶段完成回传，见 webhook.go
 	}
 }
 
@@ -78,7 +78,8 @@ func Serve(cfg *config.Config) error {
 	s := &server{cfg: cfg, st: st, eng: &engine.Engine{P: pl, St: st}, reg: reg}
 	s.auth = &authn.Auth{St: st}
 	s.eng.SetTasksDir(cfg.Paths.TasksDir)
-	s.eng.Runner = &agent.Runner{Cfg: cfg.Agent}
+	// C1 执行层迁移（TASK-004）：pi 执行器（internal/agent）已退役，engine 不装配
+	// Runner；任务阶段由 DSH 会话执行并经 /api/webhooks/advance 回传进审批闸。
 
 	// KB 检索：endpoint 非空即装配（web 检索视图，与 mode 无关）；
 	// KB grounding（18.3，FINDING-016）：mode off = 不注入 engine，零行为变化
@@ -105,8 +106,6 @@ func Serve(cfg *config.Config) error {
 	if err := watcher.Watch(cfg.Paths.TasksDir, st, done); err != nil {
 		log.Printf("[api] watcher 不可用: %v（退化为启动时同步）", err)
 	}
-	// 熔断后自动重试扫描（FINDING-027）：pending + 连败未达阈值 + 退避到期 → 重跑
-	go s.eng.StartRetryLoop(done)
 
 	mux := http.NewServeMux()
 	for _, r := range s.routes() {

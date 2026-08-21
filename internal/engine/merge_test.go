@@ -1,6 +1,7 @@
 // merge 阶段终审链路测试（FINDING-003）：team_mr_review 闸、Web 审批守卫、
 // MarkMerged 停留 merged（FINDING-029：已合并待交付看板可见）与 deliver 人工确认推进。
-// :memory: SQLite 实测，runner 用假实现不拉起 pi。
+// C1 执行层迁移（TASK-004）：无自动执行器，deliver 由 Advance 声明完成（IsLast → delivered）。
+// :memory: SQLite 实测。
 package engine
 
 import (
@@ -8,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"control-api/internal/pipeline"
 	"control-api/internal/store"
@@ -21,13 +21,6 @@ func mergePipeline() *pipeline.Pipeline {
 		{ID: "merge", Approval: "team_mr_review", Webhook: "merge_event", DoneWhen: "merged_by_teammate"},
 		{ID: "deliver", Approval: "auto"},
 	}}
-}
-
-// fakeRunner 立即返回产物的阶段执行器（不拉起真实 pi 子进程）
-type fakeRunner struct{ artifact string }
-
-func (f fakeRunner) RunStage(m *tasks.Meta, stage, model string) (string, error) {
-	return f.artifact, nil
 }
 
 // newMergeEngine 构建 merge 链路测试环境：指定 stage/status 的 task.md + :memory: store
@@ -194,14 +187,14 @@ func TestDeliverGuard(t *testing.T) {
 	}
 }
 
-// merged 停留后人工 Deliver 确认 → deliver（auto）由 fakeRunner 立即完成 → delivered；
-// work_log 依次留 merged(webhook)、deliver(alice) 两条归因条目
+// merged 停留后人工 Deliver 确认 → deliver（auto）置 running（C1：等 DSH 执行交付清理），
+// DSH 完成后再 Advance 声明 → IsLast → delivered；work_log 依次留
+// merged(webhook)、deliver(alice)、deliver(advance) 归因条目
 func TestDeliverAfterMerged(t *testing.T) {
 	eng, st, m := newMergeEngine(t, "merge", "awaiting_approval")
 	if err := st.NewApproval(m.TaskID, "merge", "team", "MR diff"); err != nil {
 		t.Fatal(err)
 	}
-	eng.Runner = fakeRunner{artifact: "交付归档"}
 	if err := eng.MarkMerged(m.TaskID, "MR !123 by @teammate"); err != nil {
 		t.Fatal(err)
 	}
@@ -212,31 +205,37 @@ func TestDeliverAfterMerged(t *testing.T) {
 	if err := eng.Deliver(m, "alice"); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(2 * time.Second) // maybeRun 异步执行，轮询等终态
-	for {
-		got := eng.reload(m.TaskID)
-		if got != nil && got.Stage == "deliver" && got.Status == "delivered" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("deliver 未完成: %+v", got)
-		}
-		time.Sleep(10 * time.Millisecond)
+	if got := eng.reload(m.TaskID); got.Stage != "deliver" || got.Status != "running" {
+		t.Fatalf("Deliver 后应 running(deliver) 等 DSH 执行: %+v", got)
+	}
+	// DSH 执行交付清理后声明阶段完成：Advance（deliver 为末阶段 → delivered）
+	m = eng.reload(m.TaskID)
+	if err := eng.Advance(m, "交付归档完成"); err != nil {
+		t.Fatal(err)
+	}
+	if got := eng.reload(m.TaskID); got.Stage != "deliver" || got.Status != "delivered" {
+		t.Fatalf("Advance 后应 delivered: %+v", got)
 	}
 	logs, err := st.ListLogs(10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var mergedOp, deliverOp string
+	var mergedOp string
+	deliverOps := []string{}
 	for _, l := range logs {
 		switch l.Action {
 		case "merged":
 			mergedOp = l.Operator
 		case "deliver":
-			deliverOp = l.Operator
+			deliverOps = append(deliverOps, l.Operator)
 		}
 	}
-	if mergedOp != "webhook" || deliverOp != "alice" {
-		t.Fatalf("归因错误: merged=%q deliver=%q, want webhook/alice", mergedOp, deliverOp)
+	// merged 归因 webhook；deliver 两条（ListLogs 按 id DESC 最新在前）：
+	// agent（Advance 声明完成，最新）+ 人工 alice（Deliver）
+	if mergedOp != "webhook" {
+		t.Fatalf("merged 归因错误: %q, want webhook", mergedOp)
+	}
+	if len(deliverOps) != 2 || deliverOps[0] != "agent" || deliverOps[1] != "alice" {
+		t.Fatalf("deliver 归因错误: %v, want [agent alice]", deliverOps)
 	}
 }

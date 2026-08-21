@@ -4,7 +4,6 @@ package engine
 
 import (
 	"fmt"
-	"log"
 	"path/filepath"
 
 	"control-api/internal/kb"
@@ -16,88 +15,18 @@ import (
 type Engine struct {
 	P  *pipeline.Pipeline
 	St *store.Store
-	// Runner 可选：设置后进入 running 状态自动执行阶段（pi 驱动）
-	Runner interface {
-		RunStage(m *tasks.Meta, stage, model string) (string, error)
-	}
+	// TasksDir 任务目录（任务即文档，task.md frontmatter 为权威）
 	TasksDir string
 	// Searcher/KBMode 可选 KB grounding（18.3，FINDING-016）：
-	// Searcher nil 或 KBMode off|"" = 完全跳过，零行为变化
+	// Searcher nil 或 KBMode off|"" = 完全跳过，零行为变化；
+	// C1 执行层迁移（TASK-004）后检查点位于 Advance 入口
+	// （DSH 声明阶段完成时校验依据；enforce 无据自动暂停）。
 	Searcher kb.Searcher
 	KBMode   string // off | warn | enforce
 }
 
-// maybeRun running 状态下异步执行当前阶段，产物就绪后自动 Advance
-func (e *Engine) maybeRun(m *tasks.Meta) {
-	if e.Runner == nil || m.Status != "running" || m.Stage == "merge" {
-		return // merge 阶段等待团队 webhook，不由 agent 执行
-	}
-	if !e.grounded(m) {
-		return // enforce 无据/不可达：已自动暂停
-	}
-	meta := *m
-	model := e.P.Model(meta.Stage) // 按 pipeline.yaml 声明选模型别名
-	log.Printf("[engine] maybeRun %s stage=%s status=%s model=%s runner=%v", meta.TaskID, meta.Stage, meta.Status, model, e.Runner != nil)
-	go func() {
-		artifact, err := e.Runner.RunStage(&meta, meta.Stage, model)
-		if err != nil {
-			log.Printf("[engine] agent_error %s: %v", meta.TaskID, err)
-			e.handleRunFailure(&meta, model, err)
-			return
-		}
-		fresh := e.reload(meta.TaskID)
-		if fresh == nil || fresh.Status == "paused" {
-			return // 暂停中不自动推进（人恢复后重新执行）
-		}
-		e.Advance(fresh, artifact)
-	}()
-}
-
-// handleRunFailure 阶段执行失败：记 work_log 后按连败熔断策略处理（18 章暂停最高权限）。
-// 连续失败（含本次）达阈值 → auto pause；否则置回 pending 等待重试。
-// 连败计数依赖 work_log 中连续前缀的失败条目，故重试状态回写不再写 work_log。
-func (e *Engine) handleRunFailure(m *tasks.Meta, model string, runErr error) {
-	failures, err := e.St.ConsecutiveFailures(m.TaskID)
-	if err != nil {
-		log.Printf("[engine] 连败计数失败 %s: %v（连同本次按熔断处理）", m.TaskID, err)
-		failures = e.P.FailureThreshold() - 1
-	}
-	failures++ // 含本次
-	detail := fmt.Sprintf("第 %d 次失败: %v", failures, runErr)
-	// 失败处理路径无法上抛错误：连败计数可能漏记一次，记日志留痕（FINDING-032）
-	if err := e.St.Log(m.TaskID, m.Stage, store.ActionAgentError, "agent", model, detail); err != nil {
-		log.Printf("[engine] work_log 写入失败 %s: %v", m.TaskID, err)
-	}
-	fresh := e.reload(m.TaskID)
-	if fresh == nil {
-		return
-	}
-	if failures >= e.P.FailureThreshold() {
-		fresh.Status = "paused" // 连败熔断自动暂停
-		e.commit(fresh, "auto_pause", detail)
-		if e.P.CircuitBreaker.Action == "auto_pause_and_notify" {
-			// FINDING-027：notify 通道 = work_log notify 条目（web 审计/看板可见）+ 日志；
-			// 接入 IM/邮件等外部通道时在此扩展
-			msg := fmt.Sprintf("任务 %s 连败 %d 次熔断暂停，请人工介入", m.TaskID, failures)
-			if err := e.St.Log(m.TaskID, m.Stage, "notify", "agent", model, msg); err != nil {
-				log.Printf("[engine] notify 落库失败 %s: %v", m.TaskID, err)
-			}
-			log.Printf("[engine] notify: %s", msg)
-		}
-		return
-	}
-	fresh.Status = "pending" // 未达阈值：可重试（状态回写权威 task.md，索引派生同步）
-	if err := tasks.WriteMeta(fresh); err != nil {
-		log.Printf("[engine] 回写 %s 失败: %v", m.TaskID, err)
-		return
-	}
-	if err := e.St.UpsertTask(fresh); err != nil {
-		log.Printf("[engine] 索引同步 %s 失败: %v", m.TaskID, err)
-	}
-}
-
+// reload 从权威源（task.md）重新读取最新状态
 func (e *Engine) reload(taskID string) *tasks.Meta {
-	// 从权威源（task.md）重新读取最新状态
 	m, err := tasks.ParseFile(filepath.Join(e.TasksDir, taskID, "task.md"))
 	if err != nil {
 		return nil
@@ -108,8 +37,13 @@ func (e *Engine) reload(taskID string) *tasks.Meta {
 // TasksDir 由 api 层注入
 func (e *Engine) SetTasksDir(dir string) { e.TasksDir = dir }
 
-// Advance 阶段完成：需要审批则入队 + awaiting_approval，否则直接进入下一阶段
+// Advance 阶段完成（C1：由 DSH 会话经 advance webhook 声明）：
+// 入口先做 KB grounding 检查（18.3，TASK-004 迁移：enforce 无据/不可达自动暂停并返回错误），
+// 通过后：需要审批则入队 + awaiting_approval，否则直接进入下一阶段。
 func (e *Engine) Advance(m *tasks.Meta, artifact string) error {
+	if !e.grounded(m) {
+		return fmt.Errorf("NO_BASIS：KB 依据缺失或不可达，任务已自动暂停（on_no_basis: pause，人工补齐依据后 resume）")
+	}
 	if m.Stage == "" {
 		m.Stage = e.P.First()
 	}
@@ -132,13 +66,9 @@ func (e *Engine) Advance(m *tasks.Meta, artifact string) error {
 	return e.enterNextAs(m, next, "auto_advance", "agent", next)
 }
 
-// enterNext 自动路径（agent 执行）进入下一阶段，work_log operator 记 agent
-func (e *Engine) enterNext(m *tasks.Meta, next, action, detail string) error {
-	return e.enterNextAs(m, next, action, "agent", detail)
-}
-
-// enterNextAs 进入下一阶段：team_mr_review 终审无 agent 执行，直接入待审批队列等
-// 合并 webhook；其余阶段置 running 并交由 maybeRun 驱动（next=="" 即末阶段 → delivered）。
+// enterNextAs 进入下一阶段：team_mr_review 终审无执行，直接入待审批队列等
+// 合并 webhook；其余阶段置 running 等待 DSH 会话执行（C1：advance webhook 回传，
+// 无自动执行器；next=="" 即末阶段 → delivered）。
 // operator 为本次流转的归因操作人（FINDING-007：人工动作记真实操作人）。
 func (e *Engine) enterNextAs(m *tasks.Meta, next, action, operator, detail string) error {
 	if next == "" {
@@ -154,11 +84,7 @@ func (e *Engine) enterNextAs(m *tasks.Meta, next, action, operator, detail strin
 		return e.commitAs(m, action, operator, detail)
 	}
 	m.Status = "running"
-	if err := e.commitAs(m, action, operator, detail); err != nil {
-		return err
-	}
-	e.maybeRun(m)
-	return nil
+	return e.commitAs(m, action, operator, detail)
 }
 
 // Approve 批准：记录裁决后推进到下一阶段。
@@ -214,17 +140,13 @@ func (e *Engine) Pause(m *tasks.Meta, by string) error {
 	return e.commitAs(m, "pause", by, "by "+by)
 }
 
-// Resume 恢复（仅人可操作；恢复后按当前 stage 重新执行）
+// Resume 恢复（仅人可操作；恢复后置 running 等待 DSH 会话按当前 stage 重新执行）
 func (e *Engine) Resume(m *tasks.Meta, by string) error {
 	if m.Status != "paused" {
 		return fmt.Errorf("任务未暂停: %s", m.Status)
 	}
 	m.Status = "running"
-	if err := e.commitAs(m, "resume", by, "by "+by); err != nil {
-		return err
-	}
-	e.maybeRun(m) // 恢复后重新执行当前阶段
-	return nil
+	return e.commitAs(m, "resume", by, "by "+by)
 }
 
 // MarkMerged 团队 MR 终审合并回传（merge webhook，FINDING-003）：
@@ -247,7 +169,7 @@ func (e *Engine) MarkMerged(taskID, detail string) error {
 }
 
 // Deliver 交付确认（FINDING-029）：仅 merge 阶段 merged 状态可触发（人工动作），
-// 推进进入 deliver 阶段（auto，maybeRun 拉起 agent 走完即 delivered）。
+// 推进进入 deliver 阶段（auto；C1 下由 DSH 会话执行交付清理后 advance → IsLast → delivered）。
 func (e *Engine) Deliver(m *tasks.Meta, by string) error {
 	if m.Stage != "merge" || m.Status != "merged" {
 		return fmt.Errorf("任务不在已合并待交付态: stage=%s status=%s", m.Stage, m.Status)

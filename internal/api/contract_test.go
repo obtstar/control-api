@@ -185,6 +185,41 @@ func TestContractTaskActionResponse(t *testing.T) {
 	}
 }
 
+// POST /api/webhooks/advance（C1：DSH 阶段完成回传）契约与状态守卫用例。
+// mergeTestPipeline: testing(required) → merge(team_mr_review) → deliver(auto)；
+// Advance 后 stage 停留当前阶段（审批针对已完成的阶段，approve 才推进下一阶段）。
+func TestAdvanceWebhook(t *testing.T) {
+	cases := []struct{ name, secret, token, body, stage, status, want string }{
+		{"未配置 secret 503", "", "", `{"task_id":"TASK-001"}`, "", "pending", "503"},
+		{"token 错误 401", "s3cret", "wrong", `{"task_id":"TASK-001"}`, "", "pending", "401"},
+		{"缺 token 401", "s3cret", "", `{"task_id":"TASK-001"}`, "", "pending", "401"},
+		{"缺 task_id 400", "s3cret", "s3cret", `{"artifact":"report.md"}`, "", "pending", "400"},
+		{"任务不存在 404", "s3cret", "s3cret", `{"task_id":"TASK-999"}`, "", "pending", "404"},
+		{"paused 409（暂停禁一切写）", "s3cret", "s3cret", `{"task_id":"TASK-001"}`, "design", "paused", "409"},
+		{"awaiting_approval 409（重复推进）", "s3cret", "s3cret", `{"task_id":"TASK-001"}`, "design", "awaiting_approval", "409"},
+		{"delivered 409", "s3cret", "s3cret", `{"task_id":"TASK-001"}`, "deliver", "delivered", "409"},
+		{"pending 空阶段→首阶段待审批 200", "s3cret", "s3cret", `{"task_id":"TASK-001","artifact":"report-requirements.md"}`, "", "pending", "200"},
+		{"running 阶段→本阶段待审批 200", "s3cret", "s3cret", `{"task_id":"TASK-001","artifact":"report-design.md"}`, "testing", "running", "200"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newWebhookServer(t, c.secret, c.stage, c.status)
+			r := httptest.NewRequest(http.MethodPost, "/api/webhooks/advance", strings.NewReader(c.body))
+			if c.token != "" {
+				r.Header.Set("X-Webhook-Token", c.token)
+			}
+			w := httptest.NewRecorder()
+			s.advanceEvent(w, r)
+			if code := fmt.Sprintf("%d", w.Code); code != c.want {
+				t.Fatalf("status = %d, want %s, body=%s", w.Code, c.want, w.Body.String())
+			}
+			if w.Code == 200 {
+				contractSpec(t).validateJSON(t, http.MethodPost, "/api/webhooks/advance", 200, w.Body.Bytes())
+			}
+		})
+	}
+}
+
 // ── KB 检索端点 ─────────────────────────────────────────────
 
 // newKBServer 构造带 fake PieKBS 的测试服务（httptest 实测，不 mock Searcher）
