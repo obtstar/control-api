@@ -160,11 +160,16 @@ func TestCreateTaskRepoKeyValidated(t *testing.T) {
 // operator 记注入身份的真实用户（FINDING-034；FINDING-026 起经 context 传递）；缺省回落 human
 func TestCreateTaskOperatorFromXUser(t *testing.T) {
 	s := newCreateTestServer(t)
-	if code, _ := postCreate(t, s, `{"title":"t1","body":"b"}`, "alice"); code != 200 {
+	var id1, id2 string
+	if code, resp := postCreate(t, s, `{"title":"t1","body":"b"}`, "alice"); code != 200 {
 		t.Fatalf("status = %d", code)
+	} else {
+		id1 = resp["task_id"]
 	}
-	if code, _ := postCreate(t, s, `{"title":"t2","body":"b"}`, ""); code != 200 {
+	if code, resp := postCreate(t, s, `{"title":"t2","body":"b"}`, ""); code != 200 {
 		t.Fatalf("status = %d", code)
+	} else {
+		id2 = resp["task_id"]
 	}
 	rows, err := s.st.ListLogs(10)
 	if err != nil {
@@ -176,11 +181,12 @@ func TestCreateTaskOperatorFromXUser(t *testing.T) {
 			got[r.TaskID] = r.Operator
 		}
 	}
-	if got["TASK-001"] != "alice" {
-		t.Errorf("TASK-001 operator = %q, want alice", got["TASK-001"])
+	// 编号 6 位（TASK-0000NN，兼容存量 3 位）：断言用创建响应返回的 task_id，不写死编号
+	if got[id1] != "alice" {
+		t.Errorf("%s operator = %q, want alice", id1, got[id1])
 	}
-	if got["TASK-002"] != "human" {
-		t.Errorf("TASK-002 operator = %q, want human（未注入身份回落）", got["TASK-002"])
+	if got[id2] != "human" {
+		t.Errorf("%s operator = %q, want human（未注入身份回落）", id2, got[id2])
 	}
 }
 
