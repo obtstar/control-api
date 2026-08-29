@@ -31,6 +31,8 @@ type server struct {
 	reg *registry.Registry
 	// searcher KB 检索（web 检索视图）：kb.endpoint 非空即装配，不受 grounding mode 门控
 	searcher kb.Searcher
+	// hub SSE 任务事件流（TASK-007）：状态流转后 broadcastTask 推送前端
+	hub *sseHub
 }
 
 // route 一条路由注册项：pattern 为 Go 1.22 mux 模式（"METHOD /path"）
@@ -53,6 +55,7 @@ func (s *server) routes() []route {
 		{"GET /api/findings", s.listFindings},
 		{"GET /api/kb/search", s.searchKB},
 		{"GET /api/openapi.yaml", s.serveOpenAPI},
+		{"GET /api/events/stream", s.streamEvents},       // SSE 任务事件流（query token，withAuth 豁免）
 		{"POST /api/webhooks/merge-event", s.mergeEvent}, // 独立密钥认证，见 webhook.go
 		{"POST /api/webhooks/advance", s.advanceEvent},   // DSH 阶段完成回传，见 webhook.go
 	}
@@ -75,7 +78,7 @@ func Serve(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	s := &server{cfg: cfg, st: st, eng: &engine.Engine{P: pl, St: st}, reg: reg}
+	s := &server{cfg: cfg, st: st, eng: &engine.Engine{P: pl, St: st}, reg: reg, hub: newSSEHub()}
 	s.auth = &authn.Auth{St: st}
 	s.eng.SetTasksDir(cfg.Paths.TasksDir)
 	// C1 执行层迁移（TASK-004）：pi 执行器（internal/agent）已退役，engine 不装配

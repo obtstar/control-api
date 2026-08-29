@@ -51,6 +51,7 @@ func (s *server) mergeEvent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, err)
 		return
 	}
+	s.broadcastTask(req.TaskID, "merged") // TASK-007 SSE 推送
 	writeJSON(w, map[string]string{"task_id": req.TaskID, "status": "merged"})
 }
 
@@ -103,5 +104,6 @@ func (s *server) advanceEvent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, err)
 		return
 	}
+	s.broadcastTask(req.TaskID, "advance") // TASK-007 SSE 推送
 	writeJSON(w, map[string]string{"task_id": req.TaskID, "stage": m.Stage, "status": m.Status})
 }

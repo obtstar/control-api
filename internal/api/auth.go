@@ -54,7 +54,8 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 func (s *server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if p == "/actuator/health" || p == "/api/auth/login" || strings.HasPrefix(p, "/api/webhooks/") {
+		if p == "/actuator/health" || p == "/api/auth/login" || strings.HasPrefix(p, "/api/webhooks/") ||
+			p == "/api/events/stream" { // SSE query token 自验（EventSource 无法带 Header），见 events.go
 			next.ServeHTTP(w, r)
 			return
 		}
