@@ -74,7 +74,7 @@ paths:
       summary: 创建任务
       description: |
         创建任务 = 在 tasks/ 下落一份 task.md（文档即任务），初始状态 pending、stage 为空。
-        任务 ID 由后端按 TASK-%03d 递增分配。
+        任务 ID 由后端按 TASK-%06d 递增分配（存量 TASK-001~010 保持 3 位兼容解析）。
       requestBody:
         required: true
         content:
@@ -522,7 +522,7 @@ components:
       properties:
         task_id:
           type: string
-          description: 任务 ID，如 TASK-001
+          description: 任务 ID，如 TASK-000011
         title:
           type: string
           description: 任务标题
@@ -589,7 +589,7 @@ components:
       properties:
         task_id:
           type: string
-          description: 分配的任务 ID，如 TASK-001
+          description: 分配的任务 ID，如 TASK-000011
         path:
           type: string
           description: 任务目录路径（task.md 所在目录）
@@ -740,7 +740,7 @@ components:
       properties:
         task_id:
           type: string
-          description: 任务 ID，如 TASK-001（必填）
+          description: 任务 ID，如 TASK-000011（必填）
         event:
           type: string
           enum: [merged]
@@ -770,7 +770,7 @@ components:
       properties:
         task_id:
           type: string
-          description: 任务 ID，如 TASK-003（必填）
+          description: 任务 ID，如 TASK-000013（必填）
         artifact:
           type: [string, "null"]
           description: 阶段产物说明（可选），如 "report-design.md"，记入 work_log detail

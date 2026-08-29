@@ -158,12 +158,12 @@ func createTaskDir(root string) (id, dir string, err error) {
 	}
 	for _, e := range entries {
 		var n int
-		if _, err := fmt.Sscanf(e.Name(), "TASK-%03d", &n); err == nil && n >= next {
+		if _, err := fmt.Sscanf(e.Name(), "TASK-%d", &n); err == nil && n >= next {
 			next = n + 1
 		}
 	}
 	for {
-		id = fmt.Sprintf("TASK-%03d", next)
+		id = fmt.Sprintf("TASK-%06d", next)
 		dir = filepath.Join(root, id)
 		if err := os.Mkdir(dir, 0o755); err == nil {
 			return id, dir, nil
