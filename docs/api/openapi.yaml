@@ -438,6 +438,36 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /events/stream:
+    get:
+      summary: SSE 任务事件流（TASK-007 实时通知）
+      description: |
+        服务端单向推送任务状态变更事件（SSE，text/event-stream）。
+        事件格式：event: task / data: {"task_id","action","ts"}。
+        前端（EventSource）收到任意事件后重拉权威列表（/api/tasks、/api/approvals/pending）。
+        EventSource 无法自定义 Authorization 头，鉴权走 query token（与 Bearer 同源会话校验，
+        本地单用户内网可接受，见 events.go）；心跳注释行每 15s 一条防代理断连。
+      parameters:
+        - name: token
+          in: query
+          required: true
+          description: 会话 token（登录返回；EventSource 无法带 Header 故走 query）
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSE 事件流（持续推送，连接保持）
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          description: token 无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   securitySchemes:
     BearerAuth:

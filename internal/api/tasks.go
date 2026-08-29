@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"control-api/internal/authn"
 	"control-api/internal/tasks"
@@ -128,6 +130,7 @@ func (s *server) taskAction(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, err)
 		return
 	}
+	s.broadcastTask(id, req.Action) // TASK-007：状态流转后 SSE 推送
 	writeJSON(w, map[string]string{"task_id": id, "stage": m.Stage, "status": m.Status})
 }
 
@@ -169,4 +172,86 @@ func createTaskDir(root string) (id, dir string, err error) {
 		}
 		next++
 	}
+}
+
+// ── SSE 任务事件流（TASK-007 实时通知，合并自 events.go 以守单包 ≤8 文件红线）──
+// sseHub 连接注册表：add/remove 增删订阅 chan，broadcast 非阻塞群发。
+type sseHub struct {
+	mu    sync.Mutex
+	conns map[chan string]struct{}
+}
+
+func newSSEHub() *sseHub {
+	return &sseHub{conns: make(map[chan string]struct{})}
+}
+
+func (h *sseHub) add() chan string {
+	ch := make(chan string, 8)
+	h.mu.Lock()
+	h.conns[ch] = struct{}{}
+	h.mu.Unlock()
+	return ch
+}
+
+func (h *sseHub) remove(ch chan string) {
+	h.mu.Lock()
+	delete(h.conns, ch)
+	h.mu.Unlock()
+}
+
+// broadcast 群发事件；任一连接缓冲满则丢弃（事件是投影，前端收到任意事件即重拉权威列表）
+func (h *sseHub) broadcast(ev string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for ch := range h.conns {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+}
+
+const sseHeartbeat = 15 * time.Second
+
+// streamEvents GET /api/events/stream?token=...：SSE 事件流（withAuth 豁免，见 auth.go）
+func (s *server) streamEvents(w http.ResponseWriter, r *http.Request) {
+	tok := r.URL.Query().Get("token")
+	if _, err := s.auth.Authenticate(tok); err != nil {
+		writeErr(w, 401, err)
+		return
+	}
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, 500, errString("streaming unsupported"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	ch := s.hub.add()
+	defer s.hub.remove(ch)
+	ticker := time.NewTicker(sseHeartbeat)
+	defer ticker.Stop()
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev := <-ch:
+			fmt.Fprintf(w, "event: task\ndata: %s\n\n", ev)
+			fl.Flush()
+		case <-ticker.C:
+			fmt.Fprint(w, ": ping\n\n") // 心跳注释行，防代理/浏览器断连
+			fl.Flush()
+		}
+	}
+}
+
+// broadcastTask 状态流转成功后广播任务事件（api 层持有 hub，engine 保持纯净）
+func (s *server) broadcastTask(taskID, action string) {
+	if s.hub == nil {
+		return // 单测夹具未装配 hub（对齐 reg 可置 nil 模式，见 server.go）
+	}
+	ev := fmt.Sprintf(`{"task_id":%q,"action":%q,"ts":%d}`, taskID, action, time.Now().Unix())
+	s.hub.broadcast(ev)
 }
