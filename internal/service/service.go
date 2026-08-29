@@ -34,16 +34,9 @@ func Run(cfg *config.Config, action string) error {
 	}
 }
 
-func install(cfg *config.Config) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	path, err := unitPath()
-	if err != nil {
-		return err
-	}
-	unit := fmt.Sprintf(`[Unit]
+// unitContent 生成 systemd unit 文本（纯函数，可测；exec systemctl 部分不 mock）
+func unitContent(exe, home string) string {
+	return fmt.Sprintf(`[Unit]
 Description=control-api (Agent 平台编排后端)
 After=default.target
 
@@ -55,7 +48,19 @@ RestartSec=5
 
 [Install]
 WantedBy=default.target
-`, exe, cfg.Paths.Home)
+`, exe, home)
+}
+
+func install(cfg *config.Config) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	path, err := unitPath()
+	if err != nil {
+		return err
+	}
+	unit := unitContent(exe, cfg.Paths.Home)
 	if err := os.WriteFile(path, []byte(unit), 0o644); err != nil {
 		return err
 	}
