@@ -51,7 +51,7 @@ ORDER BY t.updated_at DESC`)
 		return nil, err
 	}
 	defer rows.Close()
-	var out []TaskRow
+	out := []TaskRow{}
 	for rows.Next() {
 		var t TaskRow
 		if err := rows.Scan(&t.TaskID, &t.Title, &t.RepoKey, &t.Stage, &t.Status,
@@ -154,7 +154,7 @@ func (s *Store) ListLogs(limit int) ([]LogRow, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []LogRow
+	out := []LogRow{}
 	for rows.Next() {
 		var r LogRow
 		if err := rows.Scan(&r.ID, &r.TaskID, &r.Stage, &r.Action, &r.Operator,
@@ -193,7 +193,7 @@ WHERE a.decision IS NULL AND t.status = 'awaiting_approval'`
 		return nil, err
 	}
 	defer rows.Close()
-	var out []PendingApproval
+	out := []PendingApproval{}
 	for rows.Next() {
 		var p PendingApproval
 		if err := rows.Scan(&p.TaskID, &p.Title, &p.Stage, &p.Role, &p.Artifact, &p.CreatedAt); err != nil {
