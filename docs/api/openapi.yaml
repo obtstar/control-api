@@ -48,7 +48,15 @@ paths:
   /tasks:
     get:
       summary: 任务列表
-      description: 返回所有任务索引，按 updated_at 倒序。
+      description: 返回所有任务索引，按 updated_at 倒序。默认仅活跃（不含归档）；?archived=all 含归档（TASK-000020）。
+      parameters:
+        - name: archived
+          in: query
+          required: false
+          description: all=含归档任务（默认仅活跃）
+          schema:
+            type: string
+            enum: [all]
       responses:
         '200':
           description: 任务列表
