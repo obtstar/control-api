@@ -543,6 +543,9 @@ components:
         authority:
           type: string
           description: 文档权柄级别
+        archived:
+          type: boolean
+          description: 归档标记（TASK-000020）：delivered 后可归档，归档任务默认不在看板（?archived=all 查全部）
         updated_by:
           type: [string, "null"]
           description: 最近更新人（从 work_log 派生）
@@ -602,7 +605,7 @@ components:
       properties:
         action:
           type: string
-          enum: [approve, reject, pause, resume, deliver]
+          enum: [approve, reject, pause, resume, deliver, archive]
           description: |
             任务动作。approve 批准并推进到下一阶段，reject 按 pipeline on_reject 回退（必须附批注）；
             pause 暂停——最高运行时权限，任何角色可触发，暂停期间禁止一切写操作；

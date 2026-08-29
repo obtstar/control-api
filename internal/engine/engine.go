@@ -209,3 +209,18 @@ func roleFor(stage string) string {
 		return "customer"
 	}
 }
+
+// Archive 归档（TASK-000020）：仅 delivered 任务可归档；写 frontmatter archived + 索引同步 + 留痕
+func (e *Engine) Archive(m *tasks.Meta, by string) error {
+	if m.Status != "delivered" {
+		return fmt.Errorf("仅 delivered 任务可归档（当前 %s）", m.Status)
+	}
+	m.Archived = true
+	if err := tasks.WriteMeta(m); err != nil {
+		return err
+	}
+	if err := e.St.UpsertTask(m); err != nil {
+		return err
+	}
+	return e.commit(m, "archive", "归档 by "+by)
+}

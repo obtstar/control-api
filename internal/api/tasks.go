@@ -122,6 +122,8 @@ func (s *server) taskAction(w http.ResponseWriter, r *http.Request) {
 		err = s.eng.Resume(m, req.By)
 	case "deliver": // FINDING-029 交付确认：仅 merge/merged 可触发
 		err = s.eng.Deliver(m, req.By)
+	case "archive": // TASK-000020 归档：仅 delivered
+		err = s.eng.Archive(m, req.By)
 	default:
 		writeErr(w, 400, fmt.Errorf("未知 action: %s", req.Action))
 		return

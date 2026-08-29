@@ -12,13 +12,13 @@ import (
 // UpsertTask 同步任务索引（派生数据，以 frontmatter 为准）
 func (s *Store) UpsertTask(m *tasks.Meta) error {
 	_, err := s.Exec(`
-INSERT INTO task_index (task_id, title, repo_key, stage, status, authority, path, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO task_index (task_id, title, repo_key, stage, status, authority, path, archived, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(task_id) DO UPDATE SET
   title=excluded.title, repo_key=excluded.repo_key, stage=excluded.stage,
   status=excluded.status, authority=excluded.authority,
-  path=excluded.path, updated_at=excluded.updated_at`,
-		m.TaskID, m.Title, m.RepoKey, m.Stage, m.Status, m.Authority, m.Path,
+  path=excluded.path, archived=excluded.archived, updated_at=excluded.updated_at`,
+		m.TaskID, m.Title, m.RepoKey, m.Stage, m.Status, m.Authority, m.Path, boolToInt(m.Archived),
 		time.Now().Format(time.DateTime))
 	return err
 }
@@ -32,13 +32,22 @@ type TaskRow struct {
 	Authority string `json:"authority"`
 	UpdatedBy string `json:"updated_by"`
 	Path      string `json:"path"`
+	Archived  bool   `json:"archived"`
 	UpdatedAt string `json:"updated_at"`
 }
 
-func (s *Store) ListTasks() ([]TaskRow, error) {
-	rows, err := s.Query(`
+// boolToInt SQLite 布尔 ↔ 0/1（TASK-000020）
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func (s *Store) ListTasks(includeArchived bool) ([]TaskRow, error) {
+	query := `
 SELECT t.task_id, t.title, t.repo_key, t.stage, t.status, t.authority,
-       COALESCE(l.operator, '') AS updated_by, t.path, t.updated_at
+       COALESCE(l.operator, '') AS updated_by, t.path, t.archived, t.updated_at
 FROM task_index t
 LEFT JOIN (
   SELECT task_id, operator, MAX(id) AS max_id
@@ -46,7 +55,12 @@ LEFT JOIN (
   GROUP BY task_id
 ) latest ON t.task_id = latest.task_id
 LEFT JOIN work_log l ON l.id = latest.max_id
-ORDER BY t.updated_at DESC`)
+`
+	if !includeArchived {
+		query += "WHERE t.archived = 0\n"
+	}
+	query += "ORDER BY t.updated_at DESC"
+	rows, err := s.Query(query)
 	if err != nil {
 		return nil, err
 	}
@@ -54,10 +68,12 @@ ORDER BY t.updated_at DESC`)
 	out := []TaskRow{}
 	for rows.Next() {
 		var t TaskRow
+		var arch int
 		if err := rows.Scan(&t.TaskID, &t.Title, &t.RepoKey, &t.Stage, &t.Status,
-			&t.Authority, &t.UpdatedBy, &t.Path, &t.UpdatedAt); err != nil {
+			&t.Authority, &t.UpdatedBy, &t.Path, &arch, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
+		t.Archived = arch != 0
 		out = append(out, t)
 	}
 	return out, rows.Err()

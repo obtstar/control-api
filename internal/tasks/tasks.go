@@ -20,6 +20,7 @@ type Meta struct {
 	Status    string `yaml:"status"` // pending/running/awaiting_approval/paused/merged/delivered
 	Priority  string `yaml:"priority"`
 	Authority string `yaml:"authority"` // 恒 L1（需求级）
+	Archived  bool   `yaml:"archived"`  // 归档（delivered 后可归档，默认 false）
 	Path      string `yaml:"-"`         // 目录路径（非 frontmatter 字段）
 }
 

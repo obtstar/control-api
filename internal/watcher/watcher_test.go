@@ -41,7 +41,7 @@ func writeTask(t *testing.T, dir, id, status string) {
 // taskStatus 查 task_index 中任务状态；未索引返回 ("", false)
 func taskStatus(t *testing.T, st *store.Store, id string) (string, bool) {
 	t.Helper()
-	rows, err := st.ListTasks()
+	rows, err := st.ListTasks(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestWatchRootFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "根目录文件变化触发 sync", func() bool { return syncs.Load() >= 1 })
-	rows, err := st.ListTasks()
+	rows, err := st.ListTasks(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestSync(t *testing.T) {
 		if err := Sync(t.TempDir(), st); err != nil {
 			t.Fatalf("Sync: %v", err)
 		}
-		rows, err := st.ListTasks()
+		rows, err := st.ListTasks(false)
 		if err != nil {
 			t.Fatal(err)
 		}

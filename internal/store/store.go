@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS task_index (           -- 派生：由 tasks/TASK-*/t
   status      TEXT NOT NULL DEFAULT 'pending',     -- pending/running/awaiting_approval/paused/merged/delivered
   authority   TEXT NOT NULL DEFAULT 'L1',
   path        TEXT NOT NULL,                       -- tasks/ 目录路径
+  archived    INTEGER NOT NULL DEFAULT 0,          -- 归档标记（TASK-000020）
   updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS work_log (             -- 运行期流水（归档后可清空，hash 链）
@@ -83,5 +84,8 @@ CREATE TABLE IF NOT EXISTS sessions (             -- 会话 token
   expires_at  INTEGER NOT NULL                     -- Unix 秒（FINDING-020：原 DATETIME 声明与实存 int 不符；NUMERIC 亲和兼容存量数据）
 );
 `)
+
+	// 存量库补 archived 列（TASK-000020；重复执行报 duplicate column，忽略）
+	_, _ = s.Exec(`ALTER TABLE task_index ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`)
 	return err
 }

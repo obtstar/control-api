@@ -140,7 +140,9 @@ func (s *server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listTasks(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.st.ListTasks()
+	// ?archived=all 查全部（含归档）；默认仅活跃（TASK-000020）
+	include := r.URL.Query().Get("archived") == "all"
+	rows, err := s.st.ListTasks(include)
 	if err != nil {
 		writeErr(w, 500, err)
 		return
